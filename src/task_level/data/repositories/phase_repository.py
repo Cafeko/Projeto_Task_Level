@@ -68,5 +68,32 @@ class PhaseRepository:
         ).fetchone()
         return _to_model(row) if row else None
 
+    def update(self, phase: Phase) -> None:
+        phase.validate()
+        if phase.id is None:
+            raise ValueError("phase.id obrigatorio para update")
+        self._conn.execute(
+            'UPDATE phases SET name = ?, description = ?, color = ?, "order" = ?,'
+            " is_initial = ?, is_final = ? WHERE id = ?",
+            (
+                phase.name.strip(),
+                phase.description,
+                phase.color,
+                phase.order,
+                b2i(phase.is_initial),
+                b2i(phase.is_final),
+                phase.id,
+            ),
+        )
+
+    def unset_initials(self, task_type_id: int, except_id: int | None = None) -> None:
+        self._conn.execute(
+            "UPDATE phases SET is_initial = 0 WHERE task_type_id = ?"
+            + ("" if except_id is None else " AND id != ?"),
+            (task_type_id,)
+            if except_id is None
+            else (task_type_id, except_id),
+        )
+
     def delete(self, phase_id: int) -> None:
         self._conn.execute("DELETE FROM phases WHERE id = ?", (phase_id,))

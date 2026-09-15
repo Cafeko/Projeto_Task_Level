@@ -74,6 +74,28 @@ class AttributeDefinitionRepository:
         ).fetchall()
         return [_to_model(r) for r in rows]
 
+    def update(self, definition: AttributeDefinition) -> None:
+        definition.validate()
+        if definition.id is None:
+            raise ValueError("attribute_definition.id obrigatorio para update")
+        self._conn.execute(
+            'UPDATE attribute_definitions SET name = ?, label = ?, type = ?,'
+            ' required = ?, default_value = ?, reference_config = ?, "order" = ?'
+            " WHERE id = ?",
+            (
+                definition.name.strip(),
+                definition.label.strip(),
+                definition.type,
+                b2i(definition.required),
+                definition.default_value,
+                json.dumps(definition.reference_config)
+                if definition.reference_config is not None
+                else None,
+                definition.order,
+                definition.id,
+            ),
+        )
+
     def delete(self, definition_id: int) -> None:
         self._conn.execute(
             "DELETE FROM attribute_definitions WHERE id = ?", (definition_id,)

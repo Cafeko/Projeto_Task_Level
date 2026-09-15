@@ -1,7 +1,8 @@
-"""TaskType service: tipos + fases + definicoes de atributos (Parte 5)."""
+"""TaskType service: tipos + fases + definicoes de atributos (Partes 5 e 8)."""
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from task_level.data import UnitOfWork
@@ -99,28 +100,112 @@ class TaskTypeService:
             raise NotFoundError(f"task_type {type_id} nao encontrado")
         return task_type
 
+    def update_type(
+        self,
+        type_id: int,
+        name: str,
+        description: str = "",
+        color: str = "#888888",
+        icon: str = "",
+    ) -> TaskType:
+        with UnitOfWork.open(self._db_path) as uow:
+            task_type = uow.task_types.get(type_id)
+            if task_type is None:
+                raise NotFoundError(f"task_type {type_id} nao encontrado")
+            task_type.name = name
+            task_type.description = description
+            task_type.color = color
+            task_type.icon = icon
+            uow.task_types.update(task_type)
+            return task_type
+
     def add_phase(self, task_type_id: int, name: str, **kwargs) -> Phase:
         with UnitOfWork.open(self._db_path) as uow:
             if uow.task_types.get(task_type_id) is None:
                 raise NotFoundError(f"task_type {task_type_id} nao encontrado")
-            return uow.phases.add(Phase(task_type_id=task_type_id, name=name, **kwargs))
+            phase = Phase(task_type_id=task_type_id, name=name, **kwargs)
+            if phase.is_initial:
+                uow.phases.unset_initials(task_type_id)
+            return uow.phases.add(phase)
+
+    def update_phase(self, phase_id: int, **fields) -> Phase:
+        with UnitOfWork.open(self._db_path) as uow:
+            phase = uow.phases.get(phase_id)
+            if phase is None:
+                raise NotFoundError(f"phase {phase_id} nao encontrada")
+            for key, value in fields.items():
+                setattr(phase, key, value)
+            if phase.is_initial:
+                uow.phases.unset_initials(phase.task_type_id, except_id=phase_id)
+            else:
+                others = [
+                    p
+                    for p in uow.phases.list_by_task_type(phase.task_type_id)
+                    if p.id != phase_id and p.is_initial
+                ]
+                if not others:
+                    raise ValidationError("tipo precisa manter 1 fase inicial")
+            uow.phases.update(phase)
+            return phase
+
+    def delete_phase(self, phase_id: int) -> None:
+        with UnitOfWork.open(self._db_path) as uow:
+            phase = uow.phases.get(phase_id)
+            if phase is None:
+                raise NotFoundError(f"phase {phase_id} nao encontrada")
+            if phase.is_initial:
+                others = [
+                    p
+                    for p in uow.phases.list_by_task_type(phase.task_type_id)
+                    if p.id != phase_id
+                ]
+                if not any(p.is_initial for p in others):
+                    raise ValidationError("nao e possivel excluir a unica fase inicial")
+            uow.phases.delete(phase_id)
 
     def add_attribute(self, task_type_id: int, spec: dict) -> AttributeDefinition:
         with UnitOfWork.open(self._db_path) as uow:
             if uow.task_types.get(task_type_id) is None:
                 raise NotFoundError(f"task_type {task_type_id} nao encontrado")
-            return uow.attribute_definitions.add(
-                AttributeDefinition(
-                    task_type_id=task_type_id,
-                    name=spec["name"],
-                    label=spec.get("label", spec["name"]),
-                    type=spec["type"],
-                    required=bool(spec.get("required", False)),
-                    default_value=spec.get("default_value", ""),
-                    reference_config=spec.get("reference_config"),
-                    order=int(spec.get("order", 0)),
+            try:
+                return uow.attribute_definitions.add(
+                    self._spec_to_definition(task_type_id, spec)
                 )
-            )
+            except sqlite3.IntegrityError as e:
+                raise ValidationError("nome de atributo duplicado neste tipo") from e
+
+    def update_attribute(self, definition_id: int, spec: dict) -> AttributeDefinition:
+        with UnitOfWork.open(self._db_path) as uow:
+            current = uow.attribute_definitions.get(definition_id)
+            if current is None:
+                raise NotFoundError(f"attribute {definition_id} nao encontrado")
+            updated = self._spec_to_definition(current.task_type_id, spec)
+            updated.id = definition_id
+            updated.created_at = current.created_at
+            try:
+                uow.attribute_definitions.update(updated)
+            except sqlite3.IntegrityError as e:
+                raise ValidationError("nome de atributo duplicado neste tipo") from e
+            return updated
+
+    def delete_attribute(self, definition_id: int) -> None:
+        with UnitOfWork.open(self._db_path) as uow:
+            if uow.attribute_definitions.get(definition_id) is None:
+                raise NotFoundError(f"attribute {definition_id} nao encontrado")
+            uow.attribute_definitions.delete(definition_id)
+
+    @staticmethod
+    def _spec_to_definition(task_type_id: int, spec: dict) -> AttributeDefinition:
+        return AttributeDefinition(
+            task_type_id=task_type_id,
+            name=spec["name"],
+            label=spec.get("label", spec["name"]),
+            type=spec["type"],
+            required=bool(spec.get("required", False)),
+            default_value=spec.get("default_value", ""),
+            reference_config=spec.get("reference_config"),
+            order=int(spec.get("order", 0)),
+        )
 
     def delete(self, type_id: int) -> None:
         with UnitOfWork.open(self._db_path) as uow:

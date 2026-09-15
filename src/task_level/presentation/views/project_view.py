@@ -15,6 +15,9 @@ from PySide6.QtWidgets import (
 )
 
 from task_level.domain import DomainError
+from task_level.presentation.dialogs.task_type_manager_dialog import (
+    TaskTypeManagerDialog,
+)
 from task_level.services import ProjectService
 
 
@@ -26,6 +29,7 @@ class ProjectView(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._db_path = db_path
         self._projects = ProjectService(db_path)
         self._on_back = on_back
         self.project_id: int | None = None
@@ -37,8 +41,11 @@ class ProjectView(QWidget):
 
         btn_back = QPushButton("Voltar")
         btn_back.clicked.connect(self._on_back)
+        self._btn_types = QPushButton("Tipos de tarefa...")
+        self._btn_types.clicked.connect(self._manage_types)
         top = QHBoxLayout()
         top.addWidget(btn_back)
+        top.addWidget(self._btn_types)
         top.addStretch()
 
         layout = QVBoxLayout(self)
@@ -46,6 +53,11 @@ class ProjectView(QWidget):
         layout.addWidget(self._title)
         layout.addWidget(self._info)
         layout.addStretch()
+
+    def _manage_types(self) -> None:
+        if self.project_id is None:
+            return
+        TaskTypeManagerDialog(self, self._db_path, self.project_id).exec()
 
     def set_project(self, project_id: int) -> None:
         try:
