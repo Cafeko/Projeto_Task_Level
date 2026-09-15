@@ -90,6 +90,32 @@ class TaskService:
                 raise NotFoundError(f"task {task_id} nao encontrada")
             uow.tasks.delete(task_id)
 
+    def update_details(self, task_id: int, title: str, description: str = "") -> Task:
+        """Atualiza titulo/descricao (usado pelo dialog de edicao - Parte 9)."""
+        with UnitOfWork.open(self._db_path) as uow:
+            task = uow.tasks.get(task_id)
+            if task is None:
+                raise NotFoundError(f"task {task_id} nao encontrada")
+            task.title = title
+            task.description = description
+            task.updated_at = utcnow()
+            uow.tasks.update(task)
+            return task
+
+    def clear_attribute(self, task_id: int, attr_name: str) -> None:
+        """Remove o valor de um atributo (campo esvaziado no form - Parte 9)."""
+        with UnitOfWork.open(self._db_path) as uow:
+            task = uow.tasks.get(task_id)
+            if task is None:
+                raise NotFoundError(f"task {task_id} nao encontrada")
+            definition = uow.attribute_definitions.get_by_name(
+                task.task_type_id, attr_name
+            )
+            if definition is None:
+                raise NotFoundError(f"atributo '{attr_name}' nao existe neste tipo")
+            assert definition.id is not None
+            uow.task_attributes.delete(task_id, definition.id)
+
     # -- atributos ----------------------------------------------------------
 
     def set_attribute(self, task_id: int, attr_name: str, value: Any) -> TaskAttribute:
