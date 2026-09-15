@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+uv.lock
+.pytest_cache/
+.ruff_cache/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+dist/
+build/
+*.egg-info/
