@@ -113,7 +113,8 @@ task_level/
 ## Telas Principais (MVP)
 
 1. **Dashboard/Lista de Projetos** - Criar, abrir, excluir projetos
-2. **Visão do Projeto** - Kanban por fase OU lista agrupada por tipo
+2. **Visão do Projeto** - Kanban por fase OU Todos (Recentes misturado
+   por criado/modificado, ou separado por tipo e ordenado pela fase)
 3. **Gerenciar Tipos de Tarefa** - CRUD de task_types + attribute_definitions + phases
 4. **Criar/Editar Task** - Formulário dinâmico baseado nos attribute_definitions
 5. **Detalhes da Task** - Ver todos atributos, mudar fase, ver referências

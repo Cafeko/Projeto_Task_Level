@@ -1,8 +1,14 @@
-"""Visao do projeto: filtro por tipo + Kanban ou lista geral (Parte 9)."""
+"""Visao do projeto: filtro por tipo + Kanban ou lista geral (Parte 9).
+
+Modo "Todos" tem duas visoes (escolha do usuario):
+- "Recentes": tudo misturado, mais recentes (created/updated) no topo.
+- "Por tipo e fase": tasks separadas por tipo e ordenadas pela ordem da fase.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -15,6 +21,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStackedWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -27,6 +35,49 @@ from task_level.presentation.dialogs.task_type_manager_dialog import (
 )
 from task_level.presentation.widgets.kanban_board import KanbanBoard
 from task_level.services import ProjectService, TaskTypeService
+
+VIEW_RECENT = "recent"
+VIEW_GROUPED = "grouped"
+
+
+def _recency_key(task) -> datetime:
+    """created/modificado mais recente primeiro (updated > created)."""
+    candidates = [t for t in (task.updated_at, task.created_at) if t is not None]
+    if candidates:
+        return max(candidates)
+    return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def sort_recent(tasks: list) -> list:
+    """Tudo misturado, recentes no topo."""
+    return sorted(tasks, key=_recency_key, reverse=True)
+
+
+def group_by_type_and_phase(tasks: list, phases_by_id: dict) -> dict[int, list]:
+    """Agrupa por task_type_id; dentro do grupo ordena por ordem da fase.
+
+    Tasks sem fase valida vao para o fim do grupo. Desempate dentro da
+    mesma fase: recentes no topo.
+    """
+
+    def phase_key(task) -> tuple:
+        phase = phases_by_id.get(task.phase_id)
+        if phase is None:
+            return (1, 10**9, 10**9)
+        return (0, phase.order, phase.id or 0)
+
+    grouped: dict[int, list] = {}
+    for task in tasks:
+        grouped.setdefault(task.task_type_id, []).append(task)
+    for type_id, items in grouped.items():
+        by_phase: dict[tuple, list] = {}
+        for t in items:
+            by_phase.setdefault(phase_key(t), []).append(t)
+        ordered: list = []
+        for pk in sorted(by_phase):
+            ordered.extend(sorted(by_phase[pk], key=_recency_key, reverse=True))
+        grouped[type_id] = ordered
+    return grouped
 
 
 class ProjectView(QWidget):
@@ -50,6 +101,10 @@ class ProjectView(QWidget):
         btn_back.clicked.connect(self._on_back)
         self._type_filter = QComboBox()
         self._type_filter.currentIndexChanged.connect(self._filter_changed)
+        self._view_mode = QComboBox()
+        self._view_mode.addItem("Por tipo e fase", VIEW_GROUPED)
+        self._view_mode.addItem("Recentes", VIEW_RECENT)
+        self._view_mode.currentIndexChanged.connect(self._mode_changed)
         btn_new = QPushButton("Nova task")
         btn_new.clicked.connect(self._new_task)
         btn_types = QPushButton("Tipos de tarefa...")
@@ -59,15 +114,25 @@ class ProjectView(QWidget):
         top.addWidget(btn_back)
         top.addWidget(QLabel("Tipo:"))
         top.addWidget(self._type_filter)
+        self._view_label = QLabel("Visão:")
+        top.addWidget(self._view_label)
+        top.addWidget(self._view_mode)
         top.addWidget(btn_new)
         top.addWidget(btn_types)
         top.addStretch()
 
         self._all_list = QListWidget()
         self._all_list.itemDoubleClicked.connect(self._open_from_list)
+        self._grouped_tree = QTreeWidget()
+        self._grouped_tree.setHeaderLabels(["Task", "Fase", "Atualizada"])
+        self._grouped_tree.itemDoubleClicked.connect(self._open_from_tree)
+
+        self._all_stack = QStackedWidget()
+        self._all_stack.addWidget(self._all_list)
+        self._all_stack.addWidget(self._grouped_tree)
 
         self._stack = QStackedWidget()
-        self._stack.addWidget(self._all_list)
+        self._stack.addWidget(self._all_stack)
         self._board_host = QWidget()
         self._board_layout = QVBoxLayout(self._board_host)
         self._stack.addWidget(self._board_host)
@@ -105,15 +170,33 @@ class ProjectView(QWidget):
 
     def _filter_changed(self) -> None:
         type_id = self._type_filter.currentData()
+        show_mode = type_id is None
+        self._view_label.setVisible(show_mode)
+        self._view_mode.setVisible(show_mode)
         if type_id is None:
-            self._load_all_list()
-            self._stack.setCurrentWidget(self._all_list)
+            self._load_all()
+            self._stack.setCurrentWidget(self._all_stack)
         else:
             self._show_board(type_id)
 
+    def _mode_changed(self) -> None:
+        if self._type_filter.currentData() is None:
+            self._load_all()
+
+    def _current_mode(self) -> str:
+        return self._view_mode.currentData() or VIEW_GROUPED
+
     # -- lista geral --------------------------------------------------------------
 
-    def _load_all_list(self) -> None:
+    def _load_all(self) -> None:
+        if self._current_mode() == VIEW_RECENT:
+            self._load_recent_list()
+            self._all_stack.setCurrentWidget(self._all_list)
+        else:
+            self._load_grouped_tree()
+            self._all_stack.setCurrentWidget(self._grouped_tree)
+
+    def _load_recent_list(self) -> None:
         self._all_list.clear()
         if self.project_id is None:
             return
@@ -123,7 +206,7 @@ class ProjectView(QWidget):
             for tid in types:
                 for p in uow.phases.list_by_task_type(tid):
                     phases[p.id] = p
-            tasks = uow.tasks.list_by_project(self.project_id)
+            tasks = sort_recent(uow.tasks.list_by_project(self.project_id))
         for t in tasks:
             type_name = types[t.task_type_id].name if t.task_type_id in types else "?"
             phase_name = phases[t.phase_id].name if t.phase_id in phases else "-"
@@ -131,9 +214,44 @@ class ProjectView(QWidget):
             item.setData(Qt.UserRole, t.id)
             self._all_list.addItem(item)
 
+    def _load_grouped_tree(self) -> None:
+        self._grouped_tree.clear()
+        if self.project_id is None:
+            return
+        with UnitOfWork.open(self._db_path) as uow:
+            types = {t.id: t for t in uow.task_types.list_by_project(self.project_id)}
+            phases = {}
+            for tid in types:
+                for p in uow.phases.list_by_task_type(tid):
+                    phases[p.id] = p
+            grouped = group_by_type_and_phase(
+                uow.tasks.list_by_project(self.project_id), phases
+            )
+        for type_id in sorted(grouped, key=lambda i: types[i].name if i in types else "?"):
+            type_name = types[type_id].name if type_id in types else "?"
+            items = grouped[type_id]
+            header = QTreeWidgetItem([f"{type_name} ({len(items)})", "", ""])
+            header.setExpanded(True)
+            header.setData(0, Qt.UserRole, None)
+            self._grouped_tree.addTopLevelItem(header)
+            for t in items:
+                phase_name = phases[t.phase_id].name if t.phase_id in phases else "-"
+                updated = _recency_key(t)
+                stamp = updated.strftime("%d/%m %H:%M") if hasattr(updated, "strftime") else "-"
+                child = QTreeWidgetItem([f"#{t.id} {t.title}", phase_name, stamp])
+                child.setData(0, Qt.UserRole, t.id)
+                header.addChild(child)
+
     def _open_from_list(self, item: QListWidgetItem) -> None:
         if TaskDialog.edit(self, self._db_path, self.project_id, item.data(Qt.UserRole)):
-            self._load_all_list()
+            self._load_all()
+
+    def _open_from_tree(self, item: QTreeWidgetItem) -> None:
+        task_id = item.data(0, Qt.UserRole)
+        if task_id is None:  # cabecalho do tipo
+            return
+        if TaskDialog.edit(self, self._db_path, self.project_id, task_id):
+            self._load_all()
 
     # -- kanban ---------------------------------------------------------------------
 
