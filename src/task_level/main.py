@@ -1,10 +1,26 @@
-"""Entry point da aplicacao (GUI PySide6 desde a Parte 7)."""
+"""Entry point da aplicacao (GUI PySide6 desde a Parte 7).
+
+Pode ser executado de qualquer lugar, de qualquer forma:
+  python src/task_level/main.py
+  python -m task_level.main
+  uv run task-level
+"""
 
 from __future__ import annotations
 
 import argparse
 import sys
 from pathlib import Path
+
+# -- bootstrap: garante que `src/` esteja no sys.path quando executado
+# como script (duplo-clique / `python path/to/main.py`), sem depender
+# do cwd nem de instalacao editable. Nao faz nada quando ja instalado.
+try:
+    _SRC = Path(__file__).resolve().parents[1]  # .../src
+    if str(_SRC) not in sys.path:
+        sys.path.insert(0, str(_SRC))
+except Exception:
+    pass
 
 from task_level.data.database import default_db_path
 
