@@ -42,6 +42,10 @@ def _format_attr_value(attr, attr_type: str | None = None) -> str:
         return format_currency(attr.value_number)
     if attr_type == AttributeType.DATE.value and attr.value_text:
         return format_date(attr.value_text)
+    if attr_type == AttributeType.FILE.value and attr.value_text:
+        from pathlib import Path as _Path
+
+        return _Path(attr.value_text).name
     if attr.value_text is not None:
         text = attr.value_text.strip()
         return text if len(text) <= 40 else text[:39] + "…"
@@ -73,6 +77,8 @@ class TaskDialog(QDialog):
         self._ref_attr_values: dict[str, tuple[int, int] | None] = {}
         self._ref_fixed: dict[str, tuple[QComboBox, str]] = {}
         self._date_edits: dict[str, QWidget] = {}
+        self._file_pending: dict[str, str] = {}
+        self._file_cleared: set[str] = set()
 
         self.setWindowTitle("Editar task" if task_id else "Nova task")
         self.resize(480, 520)
@@ -223,6 +229,8 @@ class TaskDialog(QDialog):
         self._fields = {}
         self._ref_fixed = {}
         self._date_edits = {}
+        self._file_pending = {}
+        self._file_cleared = set()
 
     def _build_fields(self, prefill: bool) -> None:
         self._clear_attr_form()
@@ -243,6 +251,16 @@ class TaskDialog(QDialog):
                 w = QCheckBox()
                 if saved and saved.value_boolean is not None:
                     w.setChecked(saved.value_boolean)
+                widget = w
+            elif d.type == AttributeType.SELECT.value:
+                w = QComboBox()
+                w.addItem("(nenhuma)", None)
+                for option in (d.options or []):
+                    w.addItem(option, option)
+                if saved and saved.value_text:
+                    idx = w.findData(saved.value_text)
+                    if idx >= 0:
+                        w.setCurrentIndex(idx)
                 widget = w
             elif d.type == AttributeType.CURRENCY.value:
                 from task_level.domain import format_currency
@@ -334,6 +352,35 @@ class TaskDialog(QDialog):
                 container = QWidget()
                 container.setLayout(row)
                 widget = container
+            elif d.type == AttributeType.FILE.value:
+                from task_level.data.files import attachment_label
+
+                key = d.name
+                self._file_pending.pop(key, None)
+                self._file_cleared.discard(key)
+                label = QLabel("")
+                if saved and saved.value_text:
+                    label.setText(attachment_label(saved.value_text))
+                else:
+                    label.setText("(nenhum)")
+                select = QPushButton("Selecionar...")
+                select.clicked.connect(
+                    lambda _=False, k=key, lb=label: self._pick_file(k, lb)
+                )
+                open_btn = QPushButton("Abrir")
+                open_btn.clicked.connect(lambda _=False, k=key: self._open_file(k))
+                clear = QPushButton("Limpar")
+                clear.clicked.connect(
+                    lambda _=False, k=key, lb=label: self._clear_file(k, lb)
+                )
+                row = QHBoxLayout()
+                row.addWidget(label, stretch=1)
+                row.addWidget(select)
+                row.addWidget(open_btn)
+                row.addWidget(clear)
+                container = QWidget()
+                container.setLayout(row)
+                widget = container
             else:
                 continue
             suffix = " *" if d.required else ""
@@ -351,6 +398,54 @@ class TaskDialog(QDialog):
     def _clear_ref_attr(self, key: str, label: QLabel) -> None:
         self._ref_attr_values[key] = None
         label.setText("(nenhuma)")
+
+    def _effective_file(self, key: str) -> str | None:
+        """Caminho a abrir: pendente (novo) ou o ja salvo."""
+        if key in self._file_pending:
+            return self._file_pending[key]
+        if key in self._file_cleared:
+            return None
+        definition_id = next(
+            (d.id for d in self._definitions if d.name == key),
+            None,
+        )
+        saved = self._saved_values.get(definition_id) if definition_id else None
+        return saved.value_text if saved else None
+
+    def _refresh_file_label(self, key: str, label: QLabel) -> None:
+        from task_level.data.files import attachment_label
+
+        effective = self._effective_file(key)
+        prefix = "🆕 " if key in self._file_pending else ""
+        label.setText(prefix + attachment_label(effective))
+
+    def _pick_file(self, key: str, label: QLabel) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        chosen, _ = QFileDialog.getOpenFileName(self, "Selecionar arquivo")
+        if not chosen:
+            return
+        self._file_pending[key] = chosen
+        self._file_cleared.discard(key)
+        self._refresh_file_label(key, label)
+
+    def _open_file(self, key: str) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        effective = self._effective_file(key)
+        if not effective:
+            QMessageBox.information(self, "Arquivo", "Nenhum arquivo anexado.")
+            return
+        if not Path(effective).is_file():
+            QMessageBox.warning(self, "Arquivo", "Arquivo nao encontrado no disco.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(effective))
+
+    def _clear_file(self, key: str, label: QLabel) -> None:
+        self._file_pending.pop(key, None)
+        self._file_cleared.add(key)
+        self._refresh_file_label(key, label)
 
     def _describe_ref_attr(self, task_id: int, attr_id: int) -> str:
         with UnitOfWork.open(self._db_path) as uow:
@@ -419,6 +514,9 @@ class TaskDialog(QDialog):
                     values[name] = float(text.replace(",", "."))
             elif d.type == AttributeType.BOOLEAN.value:
                 values[name] = widget.isChecked()
+            elif d.type == AttributeType.SELECT.value:
+                if widget.currentData() is not None:
+                    values[name] = widget.currentData()
             elif d.type == AttributeType.CURRENCY.value:
                 from task_level.domain import ValidationError, parse_currency
 
@@ -467,7 +565,15 @@ class TaskDialog(QDialog):
             errors.append("Selecione o tipo da task.")
         payload_values = self.payload()["values"]
         for d in self._definitions:
-            if d.required and d.name not in payload_values and d.type != "boolean":
+            if not d.required or d.type == "boolean":
+                continue
+            if d.type == AttributeType.FILE.value:
+                has_file = d.name in self._file_pending or (
+                    self._effective_file(d.name) is not None
+                )
+                if not has_file:
+                    errors.append(f"'{d.label}' e obrigatorio.")
+            elif d.name not in payload_values:
                 errors.append(f"'{d.label}' e obrigatorio.")
         if errors:
             QMessageBox.warning(self, "Validacao", "\n".join(errors))
@@ -493,6 +599,7 @@ class TaskDialog(QDialog):
                     values=data["values"],
                 )
                 assert task.id is not None
+                self._apply_files(svc, task.id)
                 return task.id
             svc.update_details(self._task_id, data["title"], data["description"])
             with UnitOfWork.open(self._db_path) as uow:
@@ -502,16 +609,27 @@ class TaskDialog(QDialog):
                     task.task_type_id
                 )
             for d in definitions:
+                if d.type == AttributeType.FILE.value:
+                    continue  # anexos tratados em _apply_files
                 if d.name in data["values"]:
                     svc.set_attribute(self._task_id, d.name, data["values"][d.name])
                 else:
                     svc.clear_attribute(self._task_id, d.name)
+            self._apply_files(svc, self._task_id)
             if data["phase_id"] is not None and data["phase_id"] != task.phase_id:
                 svc.move_phase(self._task_id, data["phase_id"])
             return self._task_id
         except DomainError as e:
             QMessageBox.critical(self, "Erro", str(e))
             raise
+
+    def _apply_files(self, svc, task_id: int) -> None:
+        """Copia anexos pendentes e limpa os marcados (sem tocar nos demais)."""
+        for name, source in self._file_pending.items():
+            svc.set_file_attribute(task_id, name, source)
+        for name in self._file_cleared:
+            if name not in self._file_pending:
+                svc.clear_attribute(task_id, name)
 
     @classmethod
     def create(

@@ -12,6 +12,7 @@ from .base import b2i, i2b
 
 def _to_model(row: sqlite3.Row) -> AttributeDefinition:
     raw_config = row["reference_config"]
+    raw_options = row["options"] if "options" in row.keys() else None
     return AttributeDefinition(
         id=row["id"],
         task_type_id=row["task_type_id"],
@@ -21,6 +22,7 @@ def _to_model(row: sqlite3.Row) -> AttributeDefinition:
         required=i2b(row["required"]) or False,
         default_value=row["default_value"],
         reference_config=json.loads(raw_config) if raw_config else None,
+        options=json.loads(raw_options) if raw_options else None,
         order=row["order"],
         created_at=from_iso(row["created_at"]),
     )
@@ -34,8 +36,8 @@ class AttributeDefinitionRepository:
         definition.validate()
         cur = self._conn.execute(
             'INSERT INTO attribute_definitions (task_type_id, name, label, type, required,'
-            ' default_value, reference_config, "order", created_at)'
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ' default_value, reference_config, options, "order", created_at)'
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 definition.task_type_id,
                 definition.name.strip(),
@@ -45,6 +47,9 @@ class AttributeDefinitionRepository:
                 definition.default_value,
                 json.dumps(definition.reference_config)
                 if definition.reference_config is not None
+                else None,
+                json.dumps(definition.options, ensure_ascii=False)
+                if definition.options is not None
                 else None,
                 definition.order,
                 to_iso(definition.created_at),
@@ -80,8 +85,8 @@ class AttributeDefinitionRepository:
             raise ValueError("attribute_definition.id obrigatorio para update")
         self._conn.execute(
             'UPDATE attribute_definitions SET name = ?, label = ?, type = ?,'
-            ' required = ?, default_value = ?, reference_config = ?, "order" = ?'
-            " WHERE id = ?",
+            ' required = ?, default_value = ?, reference_config = ?, options = ?,'
+            ' "order" = ? WHERE id = ?',
             (
                 definition.name.strip(),
                 definition.label.strip(),
@@ -90,6 +95,9 @@ class AttributeDefinitionRepository:
                 definition.default_value,
                 json.dumps(definition.reference_config)
                 if definition.reference_config is not None
+                else None,
+                json.dumps(definition.options, ensure_ascii=False)
+                if definition.options is not None
                 else None,
                 definition.order,
                 definition.id,

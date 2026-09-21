@@ -29,7 +29,9 @@ TYPE_LABELS: list[tuple[str, str]] = [
     ("Numero", AttributeType.NUMBER.value),
     ("Dinheiro (R$)", AttributeType.CURRENCY.value),
     ("Data", AttributeType.DATE.value),
+    ("Arquivo", AttributeType.FILE.value),
     ("Verdadeiro/Falso", AttributeType.BOOLEAN.value),
+    ("Selecao (opcoes)", AttributeType.SELECT.value),
     ("Referencia a task", AttributeType.REFERENCE_TASK.value),
     ("Referencia a atributo", AttributeType.REFERENCE_ATTRIBUTE.value),
 ]
@@ -82,6 +84,19 @@ class AttributeDialog(QDialog):
         ref_form.addRow("Atributo alvo:", self._ref_attr)
         ref_form.addRow("", self._ref_hint)
         self._type.currentIndexChanged.connect(self._refresh_ref_section)
+        self._type.currentIndexChanged.connect(self._refresh_options_section)
+
+        # -- secao de opcoes (so visivel p/ tipo selecao) ----------------------
+        self._options_section = QWidget()
+        options_form = QFormLayout(self._options_section)
+        from PySide6.QtWidgets import QPlainTextEdit
+
+        self._options_edit = QPlainTextEdit()
+        self._options_edit.setPlaceholderText("Uma opcao por linha. Ex:\nBaixa\nMedia\nAlta")
+        self._options_edit.setMaximumHeight(90)
+        existing = spec.get("options") if isinstance(spec.get("options"), list) else []
+        self._options_edit.setPlainText("\n".join(str(o) for o in existing))
+        options_form.addRow("Opcoes:", self._options_edit)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -97,8 +112,24 @@ class AttributeDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(self._ref_section)
+        layout.addWidget(self._options_section)
         layout.addWidget(buttons)
         self._refresh_ref_section()
+        self._refresh_options_section()
+
+    def _is_select(self) -> bool:
+        return self._type.currentData() == AttributeType.SELECT.value
+
+    def _refresh_options_section(self) -> None:
+        self._options_section.setVisible(self._is_select())
+
+    def _options_data(self) -> list[str] | None:
+        if not self._is_select():
+            return None
+        options = [
+            line.strip() for line in self._options_edit.toPlainText().splitlines()
+        ]
+        return [o for o in options if o] or None
 
     # -- secao de referencia --------------------------------------------------
 
@@ -207,6 +238,9 @@ class AttributeDialog(QDialog):
         if not self._label.text().strip():
             QMessageBox.warning(self, "Validacao", "Rotulo nao pode ser vazio.")
             return
+        if self._is_select() and not self._options_data():
+            QMessageBox.warning(self, "Validacao", "Selecao precisa de ao menos 1 opcao.")
+            return
         super().accept()
 
     def data(self) -> dict:
@@ -218,6 +252,7 @@ class AttributeDialog(QDialog):
             "default_value": self._default.text(),
             "order": self._order.value(),
             "reference_config": self._reference_config_data(),
+            "options": self._options_data(),
         }
 
     @classmethod

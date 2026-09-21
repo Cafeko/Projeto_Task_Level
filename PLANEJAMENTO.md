@@ -28,7 +28,7 @@ task_types (id, project_id, name, description, color, icon, created_at)
 ```sql
 attribute_definitions (
   id, task_type_id, name, label, 
-  type: 'text' | 'number' | 'boolean' | 'currency' | 'date' | 'reference_task' | 'reference_attribute',
+  type: 'text' | 'number' | 'boolean' | 'currency' | 'date' | 'file' | 'select' | 'reference_task' | 'reference_attribute',
   required: boolean, default_value, 
   reference_config: JSON, -- para tipos de referência: {target_type_id?, attribute_name?}
   order, created_at

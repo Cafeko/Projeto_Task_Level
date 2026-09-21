@@ -24,8 +24,9 @@ uv run ruff check src tests       # lint
 
 ## Conceitos
 - **Projeto** tem varios **tipos de tarefa**; cada tipo define seus
-  **atributos** (texto, numero, booleano, referencia a task, referencia a
-  atributo) e suas **fases** (ex: Novo > Em andamento > Concluido).
+  **atributos** (texto, numero, dinheiro, data, arquivo, selecao,
+  booleano, referencia a task, referencia a atributo) e suas **fases**
+  (ex: Novo > Em andamento > Concluido).
 - Todas as tasks do mesmo tipo tem os mesmos atributos.
 - Atributos obrigatorios bloqueiam a ida para a fase final.
 - Referencias entre tasks nao podem formar ciclos.

@@ -52,15 +52,8 @@ class TaskTypeService:
             for i, spec in enumerate(attributes or []):
                 self._validate_reference_config(uow, project_id, spec)
                 uow.attribute_definitions.add(
-                    AttributeDefinition(
-                        task_type_id=task_type.id,
-                        name=spec["name"],
-                        label=spec.get("label", spec["name"]),
-                        type=spec["type"],
-                        required=bool(spec.get("required", False)),
-                        default_value=spec.get("default_value", ""),
-                        reference_config=spec.get("reference_config"),
-                        order=int(spec.get("order", i)),
+                    self._spec_to_definition(
+                        task_type.id, {**spec, "order": spec.get("order", i)}
                     )
                 )
             return task_type
@@ -242,6 +235,13 @@ class TaskTypeService:
 
     @staticmethod
     def _spec_to_definition(task_type_id: int, spec: dict) -> AttributeDefinition:
+        raw_options = spec.get("options")
+        options = None
+        if isinstance(raw_options, list):
+            options = [str(o).strip() for o in raw_options]
+            options = [o for o in options if o]
+            if not options:
+                options = None
         return AttributeDefinition(
             task_type_id=task_type_id,
             name=spec["name"],
@@ -250,6 +250,7 @@ class TaskTypeService:
             required=bool(spec.get("required", False)),
             default_value=spec.get("default_value", ""),
             reference_config=spec.get("reference_config"),
+            options=options,
             order=int(spec.get("order", 0)),
         )
 

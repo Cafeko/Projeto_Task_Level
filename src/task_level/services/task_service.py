@@ -31,6 +31,10 @@ def _has_value(attr: TaskAttribute, attr_type: str) -> bool:
         return attr.value_number is not None
     if attr_type == AttributeType.DATE.value:
         return attr.value_text is not None and attr.value_text != ""
+    if attr_type == AttributeType.FILE.value:
+        return attr.value_text is not None and attr.value_text != ""
+    if attr_type == AttributeType.SELECT.value:
+        return attr.value_text is not None and attr.value_text != ""
     if attr_type == AttributeType.REFERENCE_TASK.value:
         return attr.value_reference_task_id is not None
     if attr_type == AttributeType.REFERENCE_ATTRIBUTE.value:
@@ -96,6 +100,9 @@ class TaskService:
             if uow.tasks.get(task_id) is None:
                 raise NotFoundError(f"task {task_id} nao encontrada")
             uow.tasks.delete(task_id)
+        from task_level.data.files import remove_task_files
+
+        remove_task_files(self._db_path, task_id)
 
     def resolve_reference_attribute(
         self, task_id: int, attribute_name: str
@@ -132,7 +139,9 @@ class TaskService:
             return task
 
     def clear_attribute(self, task_id: int, attr_name: str) -> None:
-        """Remove o valor de um atributo (campo esvaziado no form - Parte 9)."""
+        """Remove o valor de um atributo (apaga o anexo se for arquivo)."""
+        from task_level.data.files import remove_file
+
         with UnitOfWork.open(self._db_path) as uow:
             task = uow.tasks.get(task_id)
             if task is None:
@@ -143,7 +152,45 @@ class TaskService:
             if definition is None:
                 raise NotFoundError(f"atributo '{attr_name}' nao existe neste tipo")
             assert definition.id is not None
+            if definition.type == AttributeType.FILE.value:
+                existing = uow.task_attributes.get(task_id, definition.id)
+                if existing is not None:
+                    remove_file(existing.value_text)
             uow.task_attributes.delete(task_id, definition.id)
+
+    def set_file_attribute(
+        self, task_id: int, attr_name: str, source: str | Path
+    ) -> TaskAttribute:
+        """Anexa arquivo: copia p/ area gerenciada e salva o caminho."""
+        from task_level.data.files import store_attachment
+
+        with UnitOfWork.open(self._db_path) as uow:
+            task = uow.tasks.get(task_id)
+            if task is None:
+                raise NotFoundError(f"task {task_id} nao encontrada")
+            definition = uow.attribute_definitions.get_by_name(
+                task.task_type_id, attr_name
+            )
+            if definition is None:
+                raise NotFoundError(f"atributo '{attr_name}' nao existe neste tipo")
+            if definition.type != AttributeType.FILE.value:
+                raise ValidationError(f"atributo '{attr_name}' nao e de arquivo")
+            assert definition.id is not None
+            src = Path(source)
+            if not src.is_file():
+                raise NotFoundError(f"arquivo nao encontrado: {source}")
+            assert task.id is not None
+            dest = store_attachment(self._db_path, task.id, attr_name, src)
+            old = uow.task_attributes.get(task.id, definition.id)
+            attr = self._build_attribute(
+                uow, task.id, definition.id, definition.type, str(dest)
+            )
+            saved = uow.task_attributes.set(attr, definition.type)
+            if old is not None and old.value_text and old.value_text != str(dest):
+                from task_level.data.files import remove_file
+
+                remove_file(old.value_text)
+            return saved
 
     # -- atributos ----------------------------------------------------------
 
@@ -205,6 +252,18 @@ class TaskService:
             except ValidationError as e:
                 raise ValidationError(f"data invalida: {value!r}") from e
             return TaskAttribute(task_id, definition_id, value_text=iso)
+        if attr_type == AttributeType.FILE.value:
+            text = str(value).strip()
+            if not text:
+                raise ValidationError("arquivo vazio")
+            return TaskAttribute(task_id, definition_id, value_text=text)
+        if attr_type == AttributeType.SELECT.value:
+            text = str(value).strip()
+            definition = uow.attribute_definitions.get(definition_id)
+            allowed = definition.options if definition and definition.options else []
+            if text not in allowed:
+                raise ValidationError(f"opcao invalida: {value!r} (permitidas: {allowed})")
+            return TaskAttribute(task_id, definition_id, value_text=text)
         if attr_type == AttributeType.REFERENCE_TASK.value:
             ref_id = int(value)
             origin = uow.tasks.get(task_id)

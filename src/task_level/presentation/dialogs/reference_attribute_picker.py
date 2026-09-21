@@ -87,6 +87,12 @@ class ReferenceAttributePicker(QDialog):
             return format_currency(attr.value_number)
         if attr_type == AttributeType.DATE.value and attr.value_text:
             return format_date(attr.value_text)
+        if attr_type == AttributeType.DATE.value and attr.value_text:
+            return format_date(attr.value_text)
+        if attr_type == AttributeType.FILE.value and attr.value_text:
+            from pathlib import Path as _Path
+
+            return _Path(attr.value_text).name
         if attr.value_text is not None:
             return attr.value_text
         if attr.value_number is not None:

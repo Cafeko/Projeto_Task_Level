@@ -1,5 +1,7 @@
 """Testes Parte 5: services (fluxo completo + ciclos + fases)."""
 
+from pathlib import Path
+
 import pytest
 
 from task_level.domain import CircularReferenceError, NotFoundError, ValidationError
@@ -380,3 +382,67 @@ def test_currency_and_date_attributes(services):
         tasks.set_attribute(task.id, "preco", "muito dinheiro")
     with pytest.raises(ValidationError):
         tasks.set_attribute(task.id, "venc", "ontem")
+
+
+def test_file_attribute_copies_clears_and_cleans_up(tmp_path):
+    from task_level.data.files import attachments_root, task_files_dir
+    from task_level.services import ProjectService, TaskService, TaskTypeService
+
+    db = tmp_path / "files.db"
+    pid = ProjectService(db).create("P1").id
+    tid = TaskTypeService(db).create_type(
+        pid, "T", attributes=[{"name": "doc", "label": "Doc", "type": "file"}]
+    ).id
+    svc = TaskService(db)
+    task = svc.create_task(pid, tid, "T1")
+    src = tmp_path / "orig.txt"
+    src.write_text("dados", encoding="utf-8")
+
+    saved = svc.set_file_attribute(task.id, "doc", src)
+    assert saved.value_text is not None and saved.value_text != str(src)
+    assert Path(saved.value_text).is_file()  # copia gerenciada
+    assert src.is_file()  # original preservada
+
+    with pytest.raises(NotFoundError):
+        svc.set_file_attribute(task.id, "doc", tmp_path / "falta.txt")
+
+    svc.clear_attribute(task.id, "doc")  # apaga valor + arquivo
+    assert not Path(saved.value_text).exists()
+
+    svc.set_file_attribute(task.id, "doc", src)
+    svc.delete(task.id)  # apaga task + pasta de anexos
+    assert not task_files_dir(db, task.id).exists()
+    _ = attachments_root(db)
+
+
+def test_select_attribute_options_validated(services):
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    with pytest.raises(ValidationError):  # select sem opcoes
+        task_types.create_type(
+            p.id,
+            "Ruim",
+            attributes=[{"name": "s", "label": "S", "type": "select"}],
+        )
+    t = task_types.create_type(
+        p.id,
+        "T",
+        attributes=[
+            {
+                "name": "tam",
+                "label": "Tamanho",
+                "type": "select",
+                "options": ["P", "M", "G"],
+            }
+        ],
+    )
+    task = tasks.create_task(p.id, t.id, "T1", values={"tam": "M"})
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(task_types._db_path) as uow:
+        tam_def = uow.attribute_definitions.get_by_name(t.id, "tam")
+        assert tam_def is not None and tam_def.options == ["P", "M", "G"]
+        got = uow.task_attributes.get(task.id, tam_def.id)
+    assert got is not None and got.value_text == "M"
+    with pytest.raises(ValidationError):  # fora das opcoes
+        tasks.set_attribute(task.id, "tam", "XG")

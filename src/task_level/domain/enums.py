@@ -11,6 +11,8 @@ class AttributeType(str, Enum):
     BOOLEAN = "boolean"
     CURRENCY = "currency"
     DATE = "date"
+    FILE = "file"
+    SELECT = "select"
     REFERENCE_TASK = "reference_task"
     REFERENCE_ATTRIBUTE = "reference_attribute"
 

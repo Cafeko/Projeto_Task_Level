@@ -16,20 +16,37 @@ def backups_dir() -> Path:
     return Path.home() / ".task_level" / "backups"
 
 
+def _backup_files_dir(backup_file: Path) -> Path:
+    return backup_file.with_name(backup_file.stem + "_files")
+
+
 def backup_db(db_path: str | Path, dest_dir: str | Path | None = None) -> Path:
-    """Copia o .db com timestamp. Retorna o caminho do backup."""
+    """Copia o .db com timestamp (+ pasta `files/` de anexos, se houver)."""
+    from task_level.data.files import attachments_root
+
     db_path = Path(db_path)
     dest = Path(dest_dir) if dest_dir else backups_dir()
     dest.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     target = dest / f"{db_path.stem}_{stamp}.db"
     shutil.copy2(db_path, target)
+    src_files = attachments_root(db_path)
+    if src_files.is_dir():
+        shutil.copytree(src_files, _backup_files_dir(target), dirs_exist_ok=True)
     return target
 
 
 def restore_db(db_path: str | Path, backup_file: str | Path) -> None:
-    """Substitui o .db atual pelo backup indicado."""
-    shutil.copy2(Path(backup_file), Path(db_path))
+    """Substitui o .db atual pelo backup indicado (+ anexos, se houver)."""
+    from task_level.data.files import attachments_root
+
+    db_path = Path(db_path)
+    shutil.copy2(Path(backup_file), db_path)
+    backed_files = _backup_files_dir(Path(backup_file))
+    current_files = attachments_root(db_path)
+    if backed_files.is_dir():
+        shutil.rmtree(current_files, ignore_errors=True)
+        shutil.copytree(backed_files, current_files)
 
 
 def export_project_json(db_path: str | Path, project_id: int) -> dict[str, Any]:
@@ -76,6 +93,7 @@ def export_project_json(db_path: str | Path, project_id: int) -> dict[str, Any]:
                             "type": d.type,
                             "required": d.required,
                             "default_value": d.default_value,
+                            "options": d.options,
                             "order": d.order,
                         }
                         for d in attr_defs

@@ -188,6 +188,20 @@ def test_attribute_dialog_reference_task_config(qapp):
         dlg.close()
 
 
+def test_attribute_dialog_select_options(qapp):
+    from task_level.presentation.dialogs.attribute_dialog import AttributeDialog
+
+    dlg = AttributeDialog(
+        None, {"name": "tam", "label": "Tamanho", "type": "select"}
+    )
+    try:
+        assert dlg._options_section.isVisibleTo(dlg)
+        dlg._options_edit.setPlainText("P\nM\nG\n")
+        assert dlg.data()["options"] == ["P", "M", "G"]
+    finally:
+        dlg.close()
+
+
 def test_phase_dialog_has_no_order_field(qapp):
     """Ordem e automatica: sai do dialogo de fase."""
     from task_level.presentation.dialogs.phase_dialog import PhaseDialog

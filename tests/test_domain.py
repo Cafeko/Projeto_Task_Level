@@ -22,6 +22,8 @@ def test_attribute_type_values():
         "boolean",
         "currency",
         "date",
+        "file",
+        "select",
         "reference_task",
         "reference_attribute",
     }

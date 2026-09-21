@@ -217,3 +217,56 @@ def test_task_dialog_currency_and_date_payload(tmp_path, qapp):
         assert payload["values"]["venc"] == "2026-09-20"
     finally:
         dlg.close()
+
+
+def test_task_dialog_file_field_pending_and_apply(tmp_path, qapp):
+    from task_level.presentation.dialogs.task_dialog import TaskDialog
+
+    db = tmp_path / "doc.db"
+    pid = ProjectService(db).create("P1").id
+    tid = TaskTypeService(db).create_type(
+        pid, "T", attributes=[{"name": "doc", "label": "Doc", "type": "file"}]
+    ).id
+    svc = TaskService(db)
+    task = svc.create_task(pid, tid, "T1")
+    src = tmp_path / "rel.pdf"
+    src.write_bytes(b"%PDF")
+
+    dlg = TaskDialog(None, db, pid, task_id=task.id)
+    try:
+        assert "doc" not in dlg.payload()["values"]  # arquivo nao vai no payload
+        dlg._file_pending["doc"] = str(src)
+        dlg._apply_files(svc, task.id)
+        from task_level.data import UnitOfWork
+
+        with UnitOfWork.open(db) as uow:
+            definition = uow.attribute_definitions.get_by_name(tid, "doc")
+            got = uow.task_attributes.get(task.id, definition.id)
+        assert got is not None and got.value_text.endswith("doc.pdf")
+    finally:
+        dlg.close()
+
+
+def test_task_dialog_select_payload(tmp_path, qapp):
+    from task_level.presentation.dialogs.task_dialog import TaskDialog
+
+    db = tmp_path / "sel.db"
+    pid = ProjectService(db).create("P1").id
+    tid = TaskTypeService(db).create_type(
+        pid,
+        "T",
+        attributes=[
+            {"name": "tam", "label": "Tamanho", "type": "select", "options": ["P", "M", "G"]}
+        ],
+    ).id
+    task = TaskService(db).create_task(pid, tid, "T1", values={"tam": "M"})
+
+    dlg = TaskDialog(None, db, pid, task_id=task.id)
+    try:
+        combo = dlg._fields["tam"]
+        assert combo.count() == 4  # (nenhuma) + 3 opcoes
+        assert combo.currentData() == "M"  # preenche salvo
+        combo.setCurrentIndex(3)
+        assert dlg.payload()["values"]["tam"] == "G"
+    finally:
+        dlg.close()

@@ -136,6 +136,7 @@ class AttributeDefinition:
     required: bool = False
     default_value: str = ""
     reference_config: dict | None = None
+    options: list[str] | None = None  # AttributeType.SELECT: valores permitidos
     order: int = 0
     id: int | None = None
     created_at: datetime = field(default_factory=utcnow)
@@ -154,6 +155,11 @@ class AttributeDefinition:
         if self.type in ref_types:
             if self.reference_config is not None and not isinstance(self.reference_config, dict):
                 raise ValidationError("attribute_definition.reference_config deve ser dict/None")
+        if self.type == AttributeType.SELECT.value:
+            if not isinstance(self.options, list) or not [
+                o for o in self.options if isinstance(o, str) and o.strip()
+            ]:
+                raise ValidationError("attribute_definition.options precisa de ao menos 1 opcao")
 
 
 @dataclass
@@ -222,6 +228,8 @@ class TaskAttribute:
             AttributeType.BOOLEAN.value: "value_boolean",
             AttributeType.CURRENCY.value: "value_number",
             AttributeType.DATE.value: "value_text",
+            AttributeType.FILE.value: "value_text",
+            AttributeType.SELECT.value: "value_text",
             AttributeType.REFERENCE_TASK.value: "value_reference_task_id",
             AttributeType.REFERENCE_ATTRIBUTE.value: "value_reference_attribute_id",
         }[attr_type]
