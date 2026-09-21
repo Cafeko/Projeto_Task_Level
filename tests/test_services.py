@@ -467,3 +467,40 @@ def test_phase_notes_crud(services):
     assert tasks.phase_notes(task.id) == {}
     with pytest.raises(NotFoundError):
         tasks.set_phase_note(task.id, 999999, "x")
+
+
+def test_list_filtered_by_attributes(services):
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    bug = task_types.create_type(
+        p.id,
+        "Bug",
+        attributes=[
+            {"name": "sev", "label": "Severidade", "type": "text"},
+            {"name": "nota", "label": "Nota", "type": "number"},
+        ],
+    )
+    feat = task_types.create_type(
+        p.id,
+        "Feature",
+        attributes=[{"name": "sev", "label": "Severidade", "type": "text"}],
+    )
+    b1 = tasks.create_task(p.id, bug.id, "B1", values={"sev": "critica", "nota": 9})
+    tasks.create_task(p.id, bug.id, "B2", values={"sev": "baixa", "nota": 2})
+    f1 = tasks.create_task(p.id, feat.id, "F1", values={"sev": "critica"})
+    _ = f1
+
+    only_crit = tasks.list_filtered(
+        p.id, None, [{"type_id": bug.id, "attr": "sev", "op": "eq", "value": "critica"}]
+    )
+    assert {t.id for t in only_crit} == {b1.id}
+    both = tasks.list_filtered(
+        p.id, None, [{"type_id": feat.id, "attr": "sev", "op": "eq", "value": "critica"}]
+    )
+    assert {t.title for t in both} == {"F1"}
+    high = tasks.list_filtered(
+        p.id, bug.id, [{"type_id": bug.id, "attr": "nota", "op": "gte", "value": "5"}]
+    )
+    assert [t.title for t in high] == ["B1"]
+    assert tasks.list_filtered(p.id, None, []) is not None
+    assert len(tasks.list_filtered(p.id, None, [])) == 3

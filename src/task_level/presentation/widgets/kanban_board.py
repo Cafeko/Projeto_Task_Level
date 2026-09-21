@@ -33,6 +33,7 @@ class KanbanBoard(QWidget):
         project_id: int,
         task_type_id: int,
         on_changed: Callable[[], None] | None = None,
+        filters: list[dict] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -40,6 +41,7 @@ class KanbanBoard(QWidget):
         self._project_id = project_id
         self._task_type_id = task_type_id
         self._on_changed = on_changed
+        self._filters: list[dict] = list(filters or [])
         self._columns: list[tuple[int, QLabel, QListWidget]] = []
 
         self._inner = QWidget()
@@ -78,7 +80,9 @@ class KanbanBoard(QWidget):
 
         with UnitOfWork.open(self._db_path) as uow:
             phases = uow.phases.list_by_task_type(self._task_type_id)
-            tasks = uow.tasks.list_by_project(self._project_id, self._task_type_id)
+        tasks = TaskService(self._db_path).list_filtered(
+            self._project_id, self._task_type_id, self._filters
+        )
         by_phase: dict[int | None, list] = {}
         for t in tasks:
             by_phase.setdefault(t.phase_id, []).append(t)

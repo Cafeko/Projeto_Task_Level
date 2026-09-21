@@ -88,6 +88,64 @@ class TaskService:
         with UnitOfWork.open(self._db_path) as uow:
             return uow.tasks.list_by_project(project_id, task_type_id, phase_id)
 
+    def list_filtered(
+        self,
+        project_id: int,
+        task_type_id: int | None,
+        filters: list[dict],
+    ) -> list[Task]:
+        """Tasks do projeto/tipo que casam TODOS os filtros de atributo."""
+        from task_level.services.filters import matches_attr
+
+        if not filters:
+            return self.list_by_project(project_id, task_type_id)
+        with UnitOfWork.open(self._db_path) as uow:
+            if task_type_id is not None:
+                defs = {
+                    d.name: d
+                    for d in uow.attribute_definitions.list_by_task_type(task_type_id)
+                }
+                by_type = {task_type_id: defs}
+            else:
+                by_type = {}
+                for t in uow.task_types.list_by_project(project_id):
+                    assert t.id is not None
+                    by_type[t.id] = {
+                        d.name: d
+                        for d in uow.attribute_definitions.list_by_task_type(t.id)
+                    }
+            result = []
+            for task in uow.tasks.list_by_project(project_id, task_type_id):
+                assert task.id is not None
+                values = {
+                    v.attribute_definition_id: v
+                    for v in uow.task_attributes.list_by_task(task.id)
+                }
+                ok = True
+                for f in filters:
+                    ftype = int(f.get("type_id")) if f.get("type_id") else None
+                    definition = None
+                    if ftype is not None and ftype in by_type:
+                        definition = by_type[ftype].get(f.get("attr", ""))
+                    elif task_type_id is not None:
+                        definition = by_type.get(task_type_id, {}).get(
+                            f.get("attr", "")
+                        )
+                    if definition is None or definition.id is None:
+                        ok = False
+                        break
+                    if not matches_attr(
+                        definition,
+                        values.get(definition.id),
+                        f.get("op", ""),
+                        str(f.get("value", "")),
+                    ):
+                        ok = False
+                        break
+                if ok:
+                    result.append(task)
+            return result
+
     def get(self, task_id: int) -> Task:
         with UnitOfWork.open(self._db_path) as uow:
             task = uow.tasks.get(task_id)

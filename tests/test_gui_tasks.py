@@ -298,3 +298,60 @@ def test_task_dialog_phase_notes_tabs(tmp_path, qapp):
         }
     finally:
         dlg.close()
+
+
+def test_filter_dialog_roundtrip(tmp_path, qapp):
+    from task_level.presentation.dialogs.filter_dialog import FilterDialog
+
+    db = tmp_path / "flt.db"
+    pid = ProjectService(db).create("P1").id
+    types = TaskTypeService(db)
+    bug = types.create_type(
+        pid,
+        "Bug",
+        attributes=[
+            {"name": "sev", "label": "Severidade", "type": "text"},
+            {"name": "tam", "label": "Tamanho", "type": "select", "options": ["P", "G"]},
+        ],
+    )
+    preset = [{"type_id": bug.id, "attr": "sev", "op": "contains", "value": "crit"}]
+    dlg = FilterDialog(None, db, pid, bug.id, preset)
+    try:
+        assert len(dlg._rows) == 1
+        assert dlg.data() == preset
+        # troca p/ atributo select: combo de opcoes aparece
+        row = dlg._rows[0]
+        for i in range(row.attr_combo.count()):
+            if row.attr_combo.itemData(i)["name"] == "tam":
+                row.attr_combo.setCurrentIndex(i)
+                break
+        assert row.stack.currentWidget() is row.combo
+    finally:
+        dlg.close()
+
+
+def test_filter_dialog_scopes_attributes_by_type(tmp_path, qapp):
+    """No Todos: escolhe o tipo primeiro, sem misturar atributos."""
+    from task_level.presentation.dialogs.filter_dialog import FilterDialog
+
+    db = tmp_path / "scope.db"
+    pid = ProjectService(db).create("P1").id
+    types = TaskTypeService(db)
+    bug = types.create_type(
+        pid, "Bug", attributes=[{"name": "sev", "label": "Severidade", "type": "text"}]
+    )
+    feat = types.create_type(
+        pid, "Feature", attributes=[{"name": "pts", "label": "Pontos", "type": "number"}]
+    )
+    dlg = FilterDialog(None, db, pid, None, [])
+    try:
+        assert dlg._type_combo is not None
+        assert dlg._type_combo.count() == 2
+        assert dlg._rows[0].attr_combo.itemData(0)["name"] == "sev"
+        idx = dlg._type_combo.findData(feat.id)
+        dlg._type_combo.setCurrentIndex(idx)
+        assert dlg._rows[0].attr_combo.itemData(0)["name"] == "pts"
+        assert dlg._type_combo.currentData() == feat.id
+        _ = bug
+    finally:
+        dlg.close()

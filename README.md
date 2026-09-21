@@ -36,3 +36,6 @@ uv run ruff check src tests       # lint
 - Visao **Todos** do projeto tem 2 modos: **Por tipo e fase**
   (separadas por tipo, ordenadas pela ordem da fase) e **Recentes**
   (tudo misturado, criadas/modificadas no topo).
+- Botao **Filtros...** filtra tasks por valores de atributos (ex: Severidade
+  contem "critica", Nota maior que 5); vale no Todos e no Kanban e zera ao
+  trocar de tipo.

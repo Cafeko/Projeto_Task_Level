@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from task_level.data import UnitOfWork
 from task_level.domain import DomainError, to_local
+from task_level.presentation.dialogs.filter_dialog import FilterDialog
 from task_level.presentation.dialogs.task_dialog import TaskDialog
 from task_level.presentation.dialogs.task_type_manager_dialog import (
     TaskTypeManagerDialog,
@@ -40,7 +41,7 @@ from task_level.presentation.widgets.type_badge import (
     normalize_color,
     type_label,
 )
-from task_level.services import ProjectService, TaskTypeService
+from task_level.services import ProjectService, TaskService, TaskTypeService
 
 VIEW_RECENT = "recent"
 VIEW_GROUPED = "grouped"
@@ -106,7 +107,10 @@ class ProjectView(QWidget):
         btn_back = QPushButton("Voltar")
         btn_back.clicked.connect(self._on_back)
         self._type_filter = QComboBox()
-        self._type_filter.currentIndexChanged.connect(self._filter_changed)
+        self._type_filter.currentIndexChanged.connect(self._on_user_type_changed)
+        self._filters: list[dict] = []
+        self._btn_filters = QPushButton("Filtros...")
+        self._btn_filters.clicked.connect(self._open_filters)
         self._view_mode = QComboBox()
         self._view_mode.addItem("Por tipo e fase", VIEW_GROUPED)
         self._view_mode.addItem("Recentes", VIEW_RECENT)
@@ -120,6 +124,7 @@ class ProjectView(QWidget):
         top.addWidget(btn_back)
         top.addWidget(QLabel("Tipo:"))
         top.addWidget(self._type_filter)
+        top.addWidget(self._btn_filters)
         self._view_label = QLabel("Visão:")
         top.addWidget(self._view_label)
         top.addWidget(self._view_mode)
@@ -187,6 +192,33 @@ class ProjectView(QWidget):
         self._type_filter.blockSignals(False)
         self._filter_changed()
 
+    def _on_user_type_changed(self) -> None:
+        # trocar de tipo invalida filtros do tipo anterior
+        self._filters = []
+        self._update_filter_button()
+        self._filter_changed()
+
+    def _update_filter_button(self) -> None:
+        self._btn_filters.setText(
+            f"Filtros ({len(self._filters)})" if self._filters else "Filtros..."
+        )
+
+    def _open_filters(self) -> None:
+        if self.project_id is None:
+            return
+        result = FilterDialog.edit(
+            self,
+            self._db_path,
+            self.project_id,
+            self._type_filter.currentData(),
+            self._filters,
+        )
+        if result is None:
+            return
+        self._filters = result
+        self._update_filter_button()
+        self._filter_changed()
+
     def _filter_changed(self) -> None:
         type_id = self._type_filter.currentData()
         show_mode = type_id is None
@@ -225,7 +257,11 @@ class ProjectView(QWidget):
             for tid in types:
                 for p in uow.phases.list_by_task_type(tid):
                     phases[p.id] = p
-            tasks = sort_recent(uow.tasks.list_by_project(self.project_id))
+            tasks = sort_recent(
+                TaskService(self._db_path).list_filtered(
+                    self.project_id, None, self._filters
+                )
+            )
         for t in tasks:
             task_type = types.get(t.task_type_id)
             type_name = task_type.name if task_type else "?"
@@ -258,7 +294,10 @@ class ProjectView(QWidget):
                 for p in uow.phases.list_by_task_type(tid):
                     phases[p.id] = p
             grouped = group_by_type_and_phase(
-                uow.tasks.list_by_project(self.project_id), phases
+                TaskService(self._db_path).list_filtered(
+                    self.project_id, None, self._filters
+                ),
+                phases,
             )
         for type_id in sorted(grouped, key=lambda i: types[i].name if i in types else "?"):
             task_type = types.get(type_id)
@@ -325,7 +364,11 @@ class ProjectView(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         board = KanbanBoard(
-            self._db_path, self.project_id, type_id, on_changed=self._board_changed
+            self._db_path,
+            self.project_id,
+            type_id,
+            on_changed=self._board_changed,
+            filters=self._filters,
         )
         self._board_layout.addWidget(board)
         self._stack.setCurrentWidget(self._board_host)
