@@ -34,6 +34,11 @@ from task_level.presentation.dialogs.task_type_manager_dialog import (
     TaskTypeManagerDialog,
 )
 from task_level.presentation.widgets.kanban_board import KanbanBoard
+from task_level.presentation.widgets.type_badge import (
+    make_color_icon,
+    normalize_color,
+    type_label,
+)
 from task_level.services import ProjectService, TaskTypeService
 
 VIEW_RECENT = "recent"
@@ -164,7 +169,10 @@ class ProjectView(QWidget):
             QMessageBox.critical(self, "Erro", str(e))
             types = []
         for t in types:
-            self._type_filter.addItem(t.name, t.id)
+            self._type_filter.addItem(type_label(t.name, t.icon), t.id)
+            self._type_filter.setItemIcon(
+                self._type_filter.count() - 1, make_color_icon(t.color)
+            )
         self._type_filter.blockSignals(False)
         self._filter_changed()
 
@@ -208,10 +216,16 @@ class ProjectView(QWidget):
                     phases[p.id] = p
             tasks = sort_recent(uow.tasks.list_by_project(self.project_id))
         for t in tasks:
-            type_name = types[t.task_type_id].name if t.task_type_id in types else "?"
+            task_type = types.get(t.task_type_id)
+            type_name = task_type.name if task_type else "?"
+            type_icon = task_type.icon if task_type else ""
+            type_color = task_type.color if task_type else None
             phase_name = phases[t.phase_id].name if t.phase_id in phases else "-"
-            item = QListWidgetItem(f"[{type_name}] #{t.id} {t.title}  ({phase_name})")
+            item = QListWidgetItem(
+                f"[{type_label(type_name, type_icon)}] #{t.id} {t.title}  ({phase_name})"
+            )
             item.setData(Qt.UserRole, t.id)
+            item.setIcon(make_color_icon(type_color))
             self._all_list.addItem(item)
 
     def _load_grouped_tree(self) -> None:
@@ -228,11 +242,25 @@ class ProjectView(QWidget):
                 uow.tasks.list_by_project(self.project_id), phases
             )
         for type_id in sorted(grouped, key=lambda i: types[i].name if i in types else "?"):
-            type_name = types[type_id].name if type_id in types else "?"
+            task_type = types.get(type_id)
+            type_name = task_type.name if task_type else "?"
+            type_icon = task_type.icon if task_type else ""
+            type_color = task_type.color if task_type else None
             items = grouped[type_id]
-            header = QTreeWidgetItem([f"{type_name} ({len(items)})", "", ""])
+            header = QTreeWidgetItem(
+                [f"{type_label(type_name, type_icon)} ({len(items)})", "", ""]
+            )
             header.setExpanded(True)
             header.setData(0, Qt.UserRole, None)
+            header.setIcon(0, make_color_icon(type_color))
+            if type_color:
+                from PySide6.QtGui import QColor
+
+                c = QColor(normalize_color(type_color))
+                c.setAlpha(40)
+                from PySide6.QtGui import QBrush
+
+                header.setBackground(0, QBrush(c))
             self._grouped_tree.addTopLevelItem(header)
             for t in items:
                 phase_name = phases[t.phase_id].name if t.phase_id in phases else "-"

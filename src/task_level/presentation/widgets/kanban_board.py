@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 from task_level.data import UnitOfWork
 from task_level.domain import DomainError
 from task_level.presentation.dialogs.task_dialog import TaskDialog
+from task_level.presentation.widgets.type_badge import normalize_color
 from task_level.services import TaskService
 
 
@@ -74,6 +75,12 @@ class KanbanBoard(QWidget):
 
         for phase in phases:
             header = QLabel("")
+            header.setStyleSheet(
+                f"font-weight: bold; padding: 4px; border-radius: 4px; "
+                f"background: {normalize_color(phase.color)}22; "
+                f"border: 1px solid {normalize_color(phase.color)};"
+            )
+            header.setToolTip(phase.description or phase.name)
             lst = QListWidget()
             lst.setMinimumWidth(220)
             lst.setContextMenuPolicy(Qt.CustomContextMenu)

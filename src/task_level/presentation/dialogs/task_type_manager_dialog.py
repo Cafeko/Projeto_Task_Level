@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from task_level.data import UnitOfWork
 from task_level.domain import DomainError
 from task_level.presentation.dialogs.task_type_dialog import TaskTypeDialog
+from task_level.presentation.widgets.type_badge import make_color_icon, type_label
 from task_level.services import TaskTypeService
 
 
@@ -64,8 +65,9 @@ class TaskTypeManagerDialog(QDialog):
             QMessageBox.critical(self, "Erro", str(e))
             return
         for t in types:
-            item = QListWidgetItem(f"#{t.id} {t.name}")
+            item = QListWidgetItem(f"#{t.id} {type_label(t.name, t.icon)}")
             item.setData(Qt.UserRole, t.id)
+            item.setIcon(make_color_icon(t.color))
             self._list.addItem(item)
 
     def _selected_id(self) -> int | None:

@@ -54,16 +54,29 @@ class TaskTypeDialog(QDialog):
         self._color = QLineEdit(payload.get("color", "#888888"))
         pick_color = QPushButton("Escolher...")
         pick_color.clicked.connect(self._pick_color)
+        from PySide6.QtWidgets import QLabel
+
+        self._color_preview = QLabel("   ")
+        self._color_preview.setFixedWidth(28)
+        self._icon_preview = QLabel("")
+        self._icon = QLineEdit(payload.get("icon", ""))
+        self._icon.setPlaceholderText("ex: 🐞  (emoji ou texto)")
+        self._color.textChanged.connect(lambda _t: self._refresh_preview())
+        self._icon.textChanged.connect(lambda _t: self._refresh_preview())
+        self._name.textChanged.connect(lambda _t: self._refresh_preview())
         color_row = QHBoxLayout()
         color_row.addWidget(self._color)
         color_row.addWidget(pick_color)
-        self._icon = QLineEdit(payload.get("icon", ""))
+        color_row.addWidget(self._color_preview)
+        icon_row = QHBoxLayout()
+        icon_row.addWidget(self._icon)
+        icon_row.addWidget(self._icon_preview)
 
         form = QFormLayout()
         form.addRow("Nome:", self._name)
         form.addRow("Descricao:", self._desc)
         form.addRow("Cor:", color_row)
-        form.addRow("Icone:", self._icon)
+        form.addRow("Icone:", icon_row)
 
         self._phases: list[dict] = [dict(p) for p in payload.get("phases", [])]
         self._attrs: list[dict] = [dict(a) for a in payload.get("attributes", [])]
@@ -82,6 +95,7 @@ class TaskTypeDialog(QDialog):
         layout.addWidget(buttons)
         self._refresh_phases()
         self._refresh_attrs()
+        self._refresh_preview()
 
     # -- topo ---------------------------------------------------------------
 
@@ -91,6 +105,22 @@ class TaskTypeDialog(QDialog):
         color = QColorDialog.getColor(QColor(self._color.text()), self)
         if color.isValid():
             self._color.setText(color.name())
+        self._refresh_preview()
+
+    def _refresh_preview(self) -> None:
+        from task_level.presentation.widgets.type_badge import (
+            normalize_color,
+            type_label,
+        )
+
+        color = normalize_color(self._color.text())
+        self._color_preview.setStyleSheet(
+            f"background: {color}; border: 1px solid #555; border-radius: 4px;"
+        )
+        self._color_preview.setToolTip(color)
+        icon = self._icon.text().strip()
+        name = self._name.text().strip() or "Nome"
+        self._icon_preview.setText(type_label(name, icon))
 
     # -- fases ----------------------------------------------------------------
 
@@ -118,6 +148,8 @@ class TaskTypeDialog(QDialog):
         return tab
 
     def _refresh_phases(self) -> None:
+        from task_level.presentation.widgets.type_badge import make_color_icon
+
         self._phase_list.clear()
         for i, spec in enumerate(self._phases):
             tags = []
@@ -128,6 +160,7 @@ class TaskTypeDialog(QDialog):
             suffix = f" [{', '.join(tags)}]" if tags else ""
             item = QListWidgetItem(f"{i}. {spec.get('name', '')}{suffix}")
             item.setData(Qt.UserRole, i)
+            item.setIcon(make_color_icon(spec.get("color", "#888888")))
             self._phase_list.addItem(item)
 
     def _add_phase(self) -> None:
