@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -28,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from task_level.data import UnitOfWork
-from task_level.domain import DomainError
+from task_level.domain import DomainError, to_local
 from task_level.presentation.dialogs.task_dialog import TaskDialog
 from task_level.presentation.dialogs.task_type_manager_dialog import (
     TaskTypeManagerDialog,
@@ -131,6 +132,12 @@ class ProjectView(QWidget):
         self._grouped_tree = QTreeWidget()
         self._grouped_tree.setHeaderLabels(["Task", "Fase", "Atualizada"])
         self._grouped_tree.itemDoubleClicked.connect(self._open_from_tree)
+        # coluna parte do tamanho do conteudo, mas o usuario pode arrastar
+        tree_header = self._grouped_tree.header()
+        tree_header.setSectionResizeMode(0, QHeaderView.Interactive)
+        tree_header.setSectionResizeMode(1, QHeaderView.Interactive)
+        tree_header.setSectionResizeMode(2, QHeaderView.Interactive)
+        tree_header.setStretchLastSection(False)
 
         self._all_stack = QStackedWidget()
         self._all_stack.addWidget(self._all_list)
@@ -160,6 +167,7 @@ class ProjectView(QWidget):
         self._reload_types()
 
     def _reload_types(self) -> None:
+        keep_type_id = self._type_filter.currentData()
         self._type_filter.blockSignals(True)
         self._type_filter.clear()
         self._type_filter.addItem("Todos", None)
@@ -173,6 +181,9 @@ class ProjectView(QWidget):
             self._type_filter.setItemIcon(
                 self._type_filter.count() - 1, make_color_icon(t.color)
             )
+        if keep_type_id is not None:
+            idx = self._type_filter.findData(keep_type_id)
+            self._type_filter.setCurrentIndex(idx if idx >= 0 else 0)
         self._type_filter.blockSignals(False)
         self._filter_changed()
 
@@ -229,6 +240,14 @@ class ProjectView(QWidget):
             self._all_list.addItem(item)
 
     def _load_grouped_tree(self) -> None:
+        # lembra quais grupos estavam abertos p/ nao fechar ao atualizar
+        first_load = self._grouped_tree.topLevelItemCount() == 0
+        was_expanded: set[int] = set()
+        for i in range(self._grouped_tree.topLevelItemCount()):
+            top = self._grouped_tree.topLevelItem(i)
+            tid = top.data(0, Qt.UserRole + 1)
+            if top.isExpanded() and tid is not None:
+                was_expanded.add(tid)
         self._grouped_tree.clear()
         if self.project_id is None:
             return
@@ -247,11 +266,11 @@ class ProjectView(QWidget):
             type_icon = task_type.icon if task_type else ""
             type_color = task_type.color if task_type else None
             items = grouped[type_id]
-            header = QTreeWidgetItem(
-                [f"{type_label(type_name, type_icon)} ({len(items)})", "", ""]
-            )
-            header.setExpanded(True)
+            header_text = f"{type_label(type_name, type_icon)} ({len(items)})"
+            header = QTreeWidgetItem([header_text, "", ""])
             header.setData(0, Qt.UserRole, None)
+            header.setData(0, Qt.UserRole + 1, type_id)
+            header.setToolTip(0, header_text)
             header.setIcon(0, make_color_icon(type_color))
             if type_color:
                 from PySide6.QtGui import QColor
@@ -262,13 +281,30 @@ class ProjectView(QWidget):
 
                 header.setBackground(0, QBrush(c))
             self._grouped_tree.addTopLevelItem(header)
+            # grupos comecam fechados; expansao so pega depois de inserir
+            header.setExpanded(False if first_load else type_id in was_expanded)
             for t in items:
                 phase_name = phases[t.phase_id].name if t.phase_id in phases else "-"
                 updated = _recency_key(t)
-                stamp = updated.strftime("%d/%m %H:%M") if hasattr(updated, "strftime") else "-"
-                child = QTreeWidgetItem([f"#{t.id} {t.title}", phase_name, stamp])
+                stamp = (
+                    to_local(updated).strftime("%d/%m %H:%M")
+                    if hasattr(updated, "strftime")
+                    else "-"
+                )
+                full_stamp = (
+                    to_local(updated).strftime("%d/%m/%Y %H:%M")
+                    if hasattr(updated, "strftime")
+                    else "-"
+                )
+                child_text = f"#{t.id} {t.title}"
+                child = QTreeWidgetItem([child_text, phase_name, stamp])
                 child.setData(0, Qt.UserRole, t.id)
+                child.setToolTip(0, child_text)
+                child.setToolTip(1, phase_name)
+                child.setToolTip(2, full_stamp)
                 header.addChild(child)
+        for col in range(3):
+            self._grouped_tree.resizeColumnToContents(col)
 
     def _open_from_list(self, item: QListWidgetItem) -> None:
         if TaskDialog.edit(self, self._db_path, self.project_id, item.data(Qt.UserRole)):

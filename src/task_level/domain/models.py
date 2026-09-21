@@ -34,6 +34,16 @@ def from_iso(s: str) -> datetime:
     return dt
 
 
+def to_local(dt: datetime) -> datetime:
+    """Converte para o fuso horario do PC (apenas p/ exibicao).
+
+    O banco continua em UTC; naive = assume UTC.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone()
+
+
 def _require_non_empty(value: str, field_name: str) -> None:
     if not value or not value.strip():
         raise ValidationError(f"{field_name} nao pode ser vazio")

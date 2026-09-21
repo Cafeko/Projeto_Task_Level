@@ -68,3 +68,16 @@ def test_iso_roundtrip():
 
     dt = utcnow()
     assert from_iso(to_iso(dt)).isoformat() == dt.isoformat()
+
+
+def test_to_local_keeps_instant_uses_pc_zone():
+    from datetime import datetime, timezone
+
+    from task_level.domain import to_local, utcnow
+
+    dt = utcnow()
+    local = to_local(dt)
+    assert local == dt  # mesmo instante
+    assert local.utcoffset() == datetime.now().astimezone().utcoffset()
+    naive = datetime(2026, 1, 1, 12, 0, 0)  # sem tz: assume UTC
+    assert to_local(naive) == naive.replace(tzinfo=timezone.utc).astimezone()

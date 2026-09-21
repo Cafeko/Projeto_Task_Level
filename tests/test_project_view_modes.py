@@ -93,3 +93,66 @@ def test_project_view_todos_alterna_modos(tmp_path, qapp):
         assert view._all_stack.currentWidget() is view._all_list
     finally:
         view.close()
+
+
+def test_reload_types_keeps_selected_filter(tmp_path, qapp):
+    """Gerenciar tipos nao deve derrubar o filtro: continua vendo as tasks."""
+    from task_level.presentation.views.project_view import ProjectView
+    from task_level.services import ProjectService, TaskService, TaskTypeService
+
+    db = tmp_path / "keep.db"
+    pid = ProjectService(db).create("P1").id
+    types = TaskTypeService(db)
+    bug = types.create_type(pid, "Bug")
+    types.create_type(pid, "Feature")
+    TaskService(db).create_task(pid, bug.id, "B1")
+
+    view = ProjectView(db, on_back=lambda: None)
+    try:
+        view.set_project(pid)
+        idx = view._type_filter.findData(bug.id)
+        view._type_filter.setCurrentIndex(idx)  # abre o Kanban do Bug
+        assert view._stack.currentWidget() is view._board_host
+        view._reload_types()  # simula voltar do "Tipos de tarefa..."
+        assert view._type_filter.currentData() == bug.id
+        assert view._stack.currentWidget() is view._board_host
+    finally:
+        view.close()
+
+
+def test_grouped_tree_keeps_expanded_and_full_names(tmp_path, qapp):
+    """Grupos comecam fechados; recarregar preserva; coluna/tooltip completos."""
+    from PySide6.QtWidgets import QHeaderView
+
+    from task_level.presentation.views.project_view import ProjectView
+    from task_level.services import ProjectService, TaskService, TaskTypeService
+
+    db = tmp_path / "tree.db"
+    pid = ProjectService(db).create("P1").id
+    types = TaskTypeService(db)
+    bug = types.create_type(pid, "Bug")
+    feat = types.create_type(pid, "Feature")
+    svc = TaskService(db)
+    svc.create_task(pid, bug.id, "Um nome bem longo de task que nao pode cortar")
+    svc.create_task(pid, feat.id, "F1")
+
+    view = ProjectView(db, on_back=lambda: None)
+    try:
+        view.set_project(pid)
+        tree = view._grouped_tree
+        assert tree.header().sectionResizeMode(0) == QHeaderView.Interactive
+        assert tree.topLevelItemCount() == 2
+        assert tree.topLevelItem(0).isExpanded() is False  # comecam fechados
+        assert tree.topLevelItem(1).isExpanded() is False
+        assert tree.columnWidth(0) > 0  # parte do tamanho do conteudo
+        first = tree.topLevelItem(0)
+        assert first.toolTip(0) == first.text(0)
+        assert "Um nome bem longo" in first.child(0).toolTip(0)
+        assert first.child(0).toolTip(1) == first.child(0).text(1)
+        assert "2026" in first.child(0).toolTip(2)  # tooltip c/ ano completo
+        first.setExpanded(True)  # usuario abre um grupo...
+        view._load_grouped_tree()  # ...atualiza (ex: editou task)...
+        assert tree.topLevelItem(0).isExpanded() is True  # ...continua aberto
+        assert tree.topLevelItem(1).isExpanded() is False  # ...e o outro fechado
+    finally:
+        view.close()
