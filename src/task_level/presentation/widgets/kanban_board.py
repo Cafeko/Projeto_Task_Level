@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMessageBox,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -47,7 +48,16 @@ class KanbanBoard(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self._inner)
+        self._btn_back = QPushButton("← Voltar")
+        self._btn_fwd = QPushButton("Avancar →")
+        self._btn_back.clicked.connect(lambda: self._step(-1))
+        self._btn_fwd.clicked.connect(lambda: self._step(+1))
+        nav = QHBoxLayout()
+        nav.addWidget(self._btn_back)
+        nav.addWidget(self._btn_fwd)
+        nav.addStretch()
         layout = QVBoxLayout(self)
+        layout.addLayout(nav)
         layout.addWidget(scroll)
         self.refresh()
 
@@ -88,6 +98,9 @@ class KanbanBoard(QWidget):
                 lambda _pos, w=lst: self._menu(w)
             )
             lst.itemDoubleClicked.connect(self._open_task)
+            lst.currentItemChanged.connect(
+                lambda _cur, _prev, w=lst: self._on_select(w)
+            )
             col = QWidget()
             col_layout = QVBoxLayout(col)
             col_layout.addWidget(header)
@@ -101,6 +114,74 @@ class KanbanBoard(QWidget):
                 item.setData(Qt.UserRole, t.id)
                 lst.addItem(item)
             self._columns.append((phase.id, header, lst))
+        self._refresh_nav()
+
+    def _selected_task_id(self) -> int | None:
+        for _, _, lst in self._columns:
+            item = lst.currentItem()
+            if item is not None:
+                return item.data(Qt.UserRole)
+        return None
+
+    def _on_select(self, source: QListWidget) -> None:
+        for _, _, other in self._columns:
+            if other is not source and other.currentItem() is not None:
+                other.blockSignals(True)
+                other.setCurrentRow(-1)
+                other.blockSignals(False)
+        self._refresh_nav()
+
+    def _refresh_nav(self) -> None:
+        task_id = self._selected_task_id()
+        if task_id is None:
+            self._btn_back.setEnabled(False)
+            self._btn_fwd.setEnabled(False)
+            self._btn_back.setToolTip("Selecione uma task")
+            self._btn_fwd.setToolTip("Selecione uma task")
+            return
+        try:
+            prev, nxt = TaskService(self._db_path).neighbors(task_id)
+        except DomainError:
+            self._btn_back.setEnabled(False)
+            self._btn_fwd.setEnabled(False)
+            return
+        self._btn_back.setEnabled(prev is not None)
+        self._btn_fwd.setEnabled(nxt is not None)
+        self._btn_back.setToolTip(
+            f"Voltar para {prev.name}" if prev else "Ja esta na primeira fase"
+        )
+        self._btn_fwd.setToolTip(
+            f"Avancar para {nxt.name}" if nxt else "Ja esta na ultima fase"
+        )
+
+    def _step(self, delta: int) -> None:
+        task_id = self._selected_task_id()
+        if task_id is None:
+            return
+        try:
+            prev, nxt = TaskService(self._db_path).neighbors(task_id)
+        except DomainError as e:
+            QMessageBox.critical(self, "Erro", str(e))
+            return
+        target = prev if delta < 0 else nxt
+        if target is None or target.id is None:
+            return
+        try:
+            TaskService(self._db_path).move_phase(task_id, target.id)
+        except DomainError as e:
+            QMessageBox.critical(self, "Erro", str(e))
+            return
+        self.refresh()
+        self._reselect(task_id)
+        self._refresh_nav()
+        self._notify()
+
+    def _reselect(self, task_id: int) -> None:
+        for _, _, lst in self._columns:
+            for row in range(lst.count()):
+                if lst.item(row).data(Qt.UserRole) == task_id:
+                    lst.setCurrentRow(row)
+                    return
 
     def _selected(self, lst: QListWidget) -> int | None:
         item = lst.currentItem()
@@ -114,13 +195,23 @@ class KanbanBoard(QWidget):
         act_open = menu.addAction("Abrir")
         move_menu = menu.addMenu("Mover para")
         with UnitOfWork.open(self._db_path) as uow:
-            phases = uow.phases.list_by_task_type(self._task_type_id)
+            phases = sorted(
+                uow.phases.list_by_task_type(self._task_type_id), key=lambda p: p.order
+            )
             current = uow.tasks.get(task_id)
         current_phase = current.phase_id if current else None
-        for p in phases:
-            if p.id == current_phase:
-                continue
-            act = move_menu.addAction(p.name)
+        neighbors: list = []
+        ids = [p.id for p in phases]
+        if current_phase in ids:
+            pos = ids.index(current_phase)
+            if pos > 0:
+                neighbors.append(("← Voltar para ", phases[pos - 1]))
+            if pos < len(phases) - 1:
+                neighbors.append(("Avancar para ", phases[pos + 1]))
+        else:
+            neighbors = [("", p) for p in phases]
+        for prefix, p in neighbors:
+            act = move_menu.addAction(f"{prefix}{p.name}")
             act.setData(p.id)
         act_delete = menu.addAction("Excluir")
         chosen = menu.exec(lst.mapToGlobal(lst.rect().center()))

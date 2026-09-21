@@ -10,6 +10,7 @@ from task_level.domain import (
     AttributeType,
     CircularReferenceError,
     NotFoundError,
+    Phase,
     Task,
     TaskAttribute,
     ValidationError,
@@ -286,6 +287,58 @@ class TaskService:
 
     # -- fases ------------------------------------------------------------------
 
+    # -- transicoes de fase (PONTO UNICO) ---------------------------------------
+    #
+    # Toda mudanca de fase passa por `check_move` + `move_phase`, e toda UI
+    # consulta `neighbors`. Quando existir o sistema de condicoes
+    # (ex: expressoes booleanas sobre atributos por fase), ele entra em
+    # `_check_conditions`, sem tocar UI nem `move_phase`:
+    #   - `neighbors` passa a ocultar/bloquear o destino com condicao falsa
+    #     (motivo em `blocked_reason`);
+    #   - `check_move` rejeita com o motivo da condicao.
+
+    def neighbors(self, task_id: int) -> tuple[Phase | None, Phase | None]:
+        """(fase anterior, proxima fase) na ordem das fases. None nas pontas."""
+        with UnitOfWork.open(self._db_path) as uow:
+            task = uow.tasks.get(task_id)
+            if task is None:
+                raise NotFoundError(f"task {task_id} nao encontrada")
+            ordered = sorted(
+                uow.phases.list_by_task_type(task.task_type_id), key=lambda p: p.order
+            )
+            ids = [p.id for p in ordered]
+            if task.phase_id not in ids:
+                return (None, None)
+            pos = ids.index(task.phase_id)
+            prev = ordered[pos - 1] if pos > 0 else None
+            nxt = ordered[pos + 1] if pos < len(ordered) - 1 else None
+            return (prev, nxt)
+
+    def check_move(self, task_id: int, phase_id: int) -> None:
+        """Valida uma transicao (levanta com o motivo se bloqueada)."""
+        with UnitOfWork.open(self._db_path) as uow:
+            task = uow.tasks.get(task_id)
+            if task is None:
+                raise NotFoundError(f"task {task_id} nao encontrada")
+            phase = uow.phases.get(phase_id)
+            if phase is None:
+                raise NotFoundError(f"phase {phase_id} nao encontrada")
+            if phase.task_type_id != task.task_type_id:
+                raise ValidationError("phase pertence a outro task_type")
+            if phase_id == task.phase_id:
+                return
+            self._require_neighbor(uow, task, phase_id)
+            self._check_conditions(uow, task, phase)
+
+    @staticmethod
+    def _check_conditions(uow: UnitOfWork, task: Task, phase: Phase) -> None:
+        """Hook p/ condicoes de transicao (FUTURO: expressoes sobre atributos).
+
+        Hoje sempre permite. Quando implementado, deve levantar
+        ValidationError com o motivo (ex: "requer 'sev' preenchida").
+        """
+        _ = (uow, task, phase)
+
     def move_phase(self, task_id: int, phase_id: int) -> Task:
         with UnitOfWork.open(self._db_path) as uow:
             task = uow.tasks.get(task_id)
@@ -296,6 +349,10 @@ class TaskService:
                 raise NotFoundError(f"phase {phase_id} nao encontrada")
             if phase.task_type_id != task.task_type_id:
                 raise ValidationError("phase pertence a outro task_type")
+            if phase_id == task.phase_id:
+                return task  # ja esta nela: nada a fazer
+            self._require_neighbor(uow, task, phase_id)
+            self._check_conditions(uow, task, phase)
             if phase.is_final:
                 self._require_required_attributes(uow, task)
                 task.completed_at = utcnow()
@@ -305,6 +362,18 @@ class TaskService:
             task.updated_at = utcnow()
             uow.tasks.update(task)
             return task
+
+    @staticmethod
+    def _require_neighbor(uow: UnitOfWork, task: Task, phase_id: int) -> None:
+        """So permite avancar ou voltar uma fase por vez (pela ordem das fases)."""
+        ordered = sorted(
+            uow.phases.list_by_task_type(task.task_type_id), key=lambda p: p.order
+        )
+        ids = [p.id for p in ordered]
+        if task.phase_id not in ids or phase_id not in ids:
+            return  # sem fase atual conhecida: permite posicionar
+        if abs(ids.index(phase_id) - ids.index(task.phase_id)) != 1:
+            raise ValidationError("so e possivel avancar ou voltar uma fase por vez")
 
     def _require_required_attributes(self, uow: UnitOfWork, task: Task) -> None:
         assert task.id is not None

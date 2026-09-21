@@ -74,7 +74,14 @@ class TaskDialog(QDialog):
         self._desc = QTextEdit()
         self._desc.setMaximumHeight(70)
         self._type_combo = QComboBox()
-        self._phase_combo = QComboBox()
+        self._phase_label = QLabel("-")
+        self._btn_phase_back = QPushButton("← Voltar")
+        self._btn_phase_fwd = QPushButton("Avancar →")
+        self._btn_phase_back.clicked.connect(lambda: self._step_phase(-1))
+        self._btn_phase_fwd.clicked.connect(lambda: self._step_phase(+1))
+        self._phase_options: list = []
+        self._origin_phase_id: int | None = None
+        self._target_phase_id: int | None = None
 
         form = QFormLayout()
         if task_id is None:
@@ -82,7 +89,11 @@ class TaskDialog(QDialog):
         else:
             self._type_label = QLabel("")
             form.addRow("Tipo:", self._type_label)
-            form.addRow("Fase:", self._phase_combo)
+            phase_row = QHBoxLayout()
+            phase_row.addWidget(self._phase_label, stretch=1)
+            phase_row.addWidget(self._btn_phase_back)
+            phase_row.addWidget(self._btn_phase_fwd)
+            form.addRow("Fase:", phase_row)
         form.addRow("Titulo:", self._title)
         form.addRow("Descricao:", self._desc)
 
@@ -131,12 +142,12 @@ class TaskDialog(QDialog):
                 for t in uow.task_types.list_by_project(self._project_id)
             }
             self._type_label.setText(type_names.get(self._type_id, "?"))
-            phases = uow.phases.list_by_task_type(self._type_id)
-            for p in phases:
-                self._phase_combo.addItem(p.name, p.id)
-            idx = self._phase_combo.findData(task.phase_id)
-            if idx >= 0:
-                self._phase_combo.setCurrentIndex(idx)
+            self._phase_options = sorted(
+                uow.phases.list_by_task_type(self._type_id), key=lambda p: p.order
+            )
+            self._origin_phase_id = task.phase_id
+            self._target_phase_id = task.phase_id
+            self._refresh_phase_stepper()
             self._title.setText(task.title)
             self._desc.setPlainText(task.description)
             self._definitions = uow.attribute_definitions.list_by_task_type(
@@ -148,6 +159,43 @@ class TaskDialog(QDialog):
             }
             self._saved_values = saved
         self._build_fields(prefill=True)
+
+    def _step_phase(self, delta: int) -> None:
+        """Move o alvo uma fase (botoes Voltar/Avancar)."""
+        ids = [p.id for p in self._phase_options]
+        if self._target_phase_id in ids:
+            pos = ids.index(self._target_phase_id)
+        elif delta > 0 and ids:
+            pos = -1
+        else:
+            return
+        new_pos = pos + delta
+        if 0 <= new_pos < len(ids):
+            self._target_phase_id = ids[new_pos]
+            self._refresh_phase_stepper()
+
+    def _refresh_phase_stepper(self) -> None:
+        ids = [p.id for p in self._phase_options]
+        names = {p.id: p.name for p in self._phase_options}
+        current = names.get(self._target_phase_id, "-")
+        if self._target_phase_id != self._origin_phase_id:
+            current += " (vai mudar ao salvar)"
+        self._phase_label.setText(current)
+        if self._target_phase_id in ids:
+            pos = ids.index(self._target_phase_id)
+            has_prev, has_next = pos > 0, pos < len(ids) - 1
+            prev_name = self._phase_options[pos - 1].name if has_prev else ""
+            next_name = self._phase_options[pos + 1].name if has_next else ""
+        else:
+            has_prev, has_next, prev_name, next_name = False, bool(ids), "", ""
+        self._btn_phase_back.setEnabled(has_prev)
+        self._btn_phase_fwd.setEnabled(has_next)
+        self._btn_phase_back.setToolTip(
+            f"Voltar para {prev_name}" if has_prev else "Ja esta na primeira fase"
+        )
+        self._btn_phase_fwd.setToolTip(
+            f"Avancar para {next_name}" if has_next else "Ja esta na ultima fase"
+        )
 
     def _rebuild_attributes(self) -> None:
         type_id = self._current_type_id()
@@ -356,7 +404,7 @@ class TaskDialog(QDialog):
             "title": self._title.text().strip(),
             "description": self._desc.toPlainText(),
             "task_type_id": self._current_type_id(),
-            "phase_id": self._phase_combo.currentData()
+            "phase_id": self._target_phase_id
             if self._task_id is not None
             else None,
             "values": values,

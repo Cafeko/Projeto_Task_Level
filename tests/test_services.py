@@ -34,17 +34,65 @@ def test_full_flow_create_move_final(services):
     task = tasks.create_task(p.id, t.id, "Bug #1")
     assert task.phase_id is not None and task.completed_at is None
 
-    # mover para fase final sem required -> falha
     from task_level.data import UnitOfWork
 
     with UnitOfWork.open(task_types._db_path) as uow:
-        final = [ph for ph in uow.phases.list_by_task_type(t.id) if ph.is_final][0]
+        ordered = sorted(uow.phases.list_by_task_type(t.id), key=lambda p: p.order)
+    initial, middle, final = (ph.id for ph in ordered)
+    # pular direto p/ a final nao pode
     with pytest.raises(ValidationError):
-        tasks.move_phase(task.id, final.id)
+        tasks.move_phase(task.id, final)
+    # avanca uma: ok
+    tasks.move_phase(task.id, middle)
+    # final sem required -> falha
+    with pytest.raises(ValidationError):
+        tasks.move_phase(task.id, final)
     # preenche required e move -> ok + completed_at setado
     tasks.set_attribute(task.id, "sev", "alta")
-    moved = tasks.move_phase(task.id, final.id)
-    assert moved.phase_id == final.id and moved.completed_at is not None
+    moved = tasks.move_phase(task.id, final)
+    assert moved.phase_id == final and moved.completed_at is not None
+    _ = initial
+
+
+def test_move_phase_only_neighbors(services):
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    t = _bug_type(task_types, p.id)
+    task = tasks.create_task(p.id, t.id, "Bug #1", values={"sev": "alta"})
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(task_types._db_path) as uow:
+        ordered = sorted(uow.phases.list_by_task_type(t.id), key=lambda p: p.order)
+    first, second, third = (ph.id for ph in ordered)
+    with pytest.raises(ValidationError):  # pular p/ frente
+        tasks.move_phase(task.id, third)
+    tasks.move_phase(task.id, second)  # vizinha: ok
+    tasks.move_phase(task.id, third)  # vizinha: ok
+    with pytest.raises(ValidationError):  # voltar pulando
+        tasks.move_phase(task.id, first)
+    back = tasks.move_phase(task.id, second)  # voltar uma: ok
+    assert back.phase_id == second and back.completed_at is None
+
+
+def test_neighbors_and_check_move_single_point(services):
+    """UI consulta neighbors; check_move valida (terreno p/ condicoes)."""
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    t = _bug_type(task_types, p.id)
+    task = tasks.create_task(p.id, t.id, "Bug #1", values={"sev": "alta"})
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(task_types._db_path) as uow:
+        ordered = sorted(uow.phases.list_by_task_type(t.id), key=lambda p: p.order)
+    prev, nxt = tasks.neighbors(task.id)
+    assert prev is None and nxt is not None and nxt.id == ordered[1].id
+    tasks.move_phase(task.id, nxt.id)
+    tasks.move_phase(task.id, tasks.neighbors(task.id)[1].id)
+    prev, nxt = tasks.neighbors(task.id)
+    assert nxt is None and prev is not None and prev.id == ordered[1].id
+    tasks.check_move(task.id, prev.id)  # vizinha: ok
+    with pytest.raises(ValidationError):  # pular: rejeita no ponto unico
+        tasks.check_move(task.id, ordered[0].id)
 
 
 def test_reference_and_cycle_rejected(services):

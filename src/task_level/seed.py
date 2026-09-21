@@ -67,8 +67,11 @@ def seed_demo(db_path: str | Path) -> dict[str, Any]:
         },
     )
     with UnitOfWork.open(db_path) as uow:
-        finals = [ph for ph in uow.phases.list_by_task_type(bug.id) if ph.is_final]
-    tasks.move_phase(b1.id, finals[0].id)
+        ordered = sorted(
+            uow.phases.list_by_task_type(bug.id), key=lambda p: p.order
+        )
+    for ph in ordered[1:]:  # avanca uma fase por vez ate a final
+        tasks.move_phase(b1.id, ph.id)
 
     return {
         "project_id": project.id,

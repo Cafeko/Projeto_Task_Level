@@ -76,13 +76,62 @@ def test_kanban_board_columns_and_move(setup, qapp):
         from task_level.data import UnitOfWork
 
         with UnitOfWork.open(db) as uow:
-            final = [p for p in uow.phases.list_by_task_type(tid) if p.is_final][0]
-        svc.set_attribute(a.id, "sev", "alta")
-        board._move_task(a.id, final.id)
+            ordered = sorted(uow.phases.list_by_task_type(tid), key=lambda p: p.order)
+        board._move_task(a.id, ordered[1].id)  # avanca uma
+        counts = [lst.count() for _, _, lst in board._columns]
+        assert sum(counts) == 1 and counts[1] == 1
+        board._move_task(a.id, ordered[2].id)  # avanca p/ final
         counts = [lst.count() for _, _, lst in board._columns]
         assert sum(counts) == 1 and counts[-1] == 1
     finally:
         board.close()
+
+
+def test_kanban_nav_buttons_step_one_phase(setup, qapp):
+    db, pid, tid = setup
+    svc = TaskService(db)
+    a = svc.create_task(pid, tid, "A", values={"sev": "alta"})
+    board = KanbanBoard(db, pid, tid)
+    try:
+        assert board._btn_back.isEnabled() is False  # nada selecionado
+        assert board._btn_fwd.isEnabled() is False
+        board._columns[0][2].setCurrentRow(0)
+        assert board._btn_back.isEnabled() is False  # primeira fase
+        assert board._btn_fwd.isEnabled() is True
+        board._btn_fwd.click()  # avancar uma
+        assert svc.get(a.id).phase_id is not None
+        board._columns[1][2].setCurrentRow(0)
+        assert board._btn_back.isEnabled() is True
+        board._btn_back.click()  # voltar uma
+        from task_level.data import UnitOfWork
+
+        with UnitOfWork.open(db) as uow:
+            ordered = sorted(uow.phases.list_by_task_type(tid), key=lambda p: p.order)
+        assert svc.get(a.id).phase_id == ordered[0].id
+    finally:
+        board.close()
+
+
+def test_task_dialog_phase_stepper_buttons(tmp_path, qapp):
+    from task_level.presentation.dialogs.task_dialog import TaskDialog
+
+    db = tmp_path / "ph.db"
+    pid = ProjectService(db).create("P1").id
+    tid = TaskTypeService(db).create_type(pid, "Bug").id
+    task = TaskService(db).create_task(pid, tid, "B1")
+    dlg = TaskDialog(None, db, pid, task_id=task.id)
+    try:
+        assert dlg._phase_label.text() == "Novo"
+        assert dlg._btn_phase_back.isEnabled() is False  # primeira fase
+        assert dlg._btn_phase_fwd.isEnabled() is True
+        dlg._btn_phase_fwd.click()  # avancar uma
+        assert dlg._phase_label.text().startswith("Em andamento")
+        assert dlg.payload()["phase_id"] != task.phase_id
+        dlg._btn_phase_back.click()  # voltar
+        assert dlg._phase_label.text() == "Novo"
+        assert dlg.payload()["phase_id"] == task.phase_id
+    finally:
+        dlg.close()
 
 
 def test_task_dialog_fixed_ref_attribute_task_only(tmp_path, qapp):
