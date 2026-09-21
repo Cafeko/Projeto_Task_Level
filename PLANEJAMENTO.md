@@ -147,10 +147,10 @@ task_level/
 ---
 
 ## Próximos Passos (Pós-MVP)
-- Condições de transição entre fases (expressões booleanas sobre atributos)
-  → terreno pronto: `TaskService.neighbors` (UI), `TaskService.check_move`
-  + `_check_conditions` (validacao), botoes Voltar/Avancar no Kanban e no
-  dialogo da task; regra atual = uma fase por vez.
+- [x] Condições de transição entre fases → `Phase.enter_conditions`
+  (lista AND de {attr, op, value} por fase, mesmo operadores do filtro),
+  avaliadas em `TaskService.check_move`; UI desabilita Voltar/Avancar com
+  o motivo (`transition_block`).
 - Automações (quando X → faça Y)
 - Views salvas / filtros avançados
 - Import/Export (JSON, CSV)

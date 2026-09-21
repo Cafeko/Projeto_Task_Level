@@ -112,6 +112,75 @@ def test_kanban_nav_buttons_step_one_phase(setup, qapp):
         board.close()
 
 
+def test_kanban_nav_button_blocked_by_condition(tmp_path, qapp):
+    db = tmp_path / "cond.db"
+    pid = ProjectService(db).create("P1").id
+    tid = TaskTypeService(db).create_type(
+        pid,
+        "T",
+        phases=[
+            {"name": "Novo", "is_initial": True},
+            {
+                "name": "Revisao",
+                "enter_conditions": [{"attr": "ok", "op": "is_true", "value": ""}],
+            },
+            {"name": "Pronto", "is_final": True},
+        ],
+        attributes=[{"name": "ok", "label": "OK", "type": "boolean"}],
+    ).id
+    svc = TaskService(db)
+    a = svc.create_task(pid, tid, "A", values={"ok": False})
+    board = KanbanBoard(db, pid, tid)
+    try:
+        board._columns[0][2].setCurrentRow(0)
+        assert board._btn_fwd.isEnabled() is True  # deixa tentar...
+        assert "Revisao" in board._btn_fwd.toolTip()  # ...avisando o motivo
+        svc.set_attribute(a.id, "ok", True)
+        board._refresh_nav()
+        assert board._btn_fwd.isEnabled() is True
+        assert "Revisao" in board._btn_fwd.toolTip()  # destino liberado
+    finally:
+        board.close()
+
+
+def test_task_dialog_blocked_phase_warns_and_reverts(tmp_path, qapp, monkeypatch):
+    from PySide6.QtWidgets import QDialog, QMessageBox
+
+    from task_level.presentation.dialogs.task_dialog import TaskDialog
+
+    db = tmp_path / "cond_dlg.db"
+    pid = ProjectService(db).create("P1").id
+    tid = TaskTypeService(db).create_type(
+        pid,
+        "T",
+        phases=[
+            {"name": "Novo", "is_initial": True},
+            {
+                "name": "Revisao",
+                "enter_conditions": [{"attr": "ok", "op": "is_true", "value": ""}],
+            },
+            {"name": "Pronto", "is_final": True},
+        ],
+        attributes=[{"name": "ok", "label": "OK", "type": "boolean"}],
+    ).id
+    task = TaskService(db).create_task(pid, tid, "A", values={"ok": False})
+    warned = []
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *a, **k: warned.append(a[2] if len(a) > 2 else "")
+    )
+    dlg = TaskDialog(None, db, pid, task_id=task.id)
+    try:
+        assert dlg._btn_phase_fwd.isEnabled() is True  # deixa tentar
+        dlg._btn_phase_fwd.click()  # alvo = Revisao (bloqueada)
+        dlg.accept()  # avisa o motivo e volta p/ origem, sem fechar
+        assert warned and "Revisao" in warned[0]
+        assert dlg.result() == QDialog.Rejected
+        assert dlg._target_phase_id == task.phase_id
+        assert dlg._phase_label.text() == "Novo"
+    finally:
+        dlg.close()
+
+
 def test_task_dialog_phase_stepper_buttons(tmp_path, qapp):
     from task_level.presentation.dialogs.task_dialog import TaskDialog
 

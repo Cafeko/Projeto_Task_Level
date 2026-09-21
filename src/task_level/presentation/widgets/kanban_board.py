@@ -171,7 +171,18 @@ class KanbanBoard(QWidget):
             self._btn_fwd.setToolTip("Selecione uma task")
             return
         try:
-            prev, nxt = TaskService(self._db_path).neighbors(task_id)
+            svc = TaskService(self._db_path)
+            prev, nxt = svc.neighbors(task_id)
+            back_block = (
+                svc.transition_block(task_id, prev.id)
+                if prev is not None and prev.id is not None
+                else None
+            )
+            fwd_block = (
+                svc.transition_block(task_id, nxt.id)
+                if nxt is not None and nxt.id is not None
+                else None
+            )
         except DomainError:
             self._btn_back.setEnabled(False)
             self._btn_fwd.setEnabled(False)
@@ -179,10 +190,12 @@ class KanbanBoard(QWidget):
         self._btn_back.setEnabled(prev is not None)
         self._btn_fwd.setEnabled(nxt is not None)
         self._btn_back.setToolTip(
-            f"Voltar para {prev.name}" if prev else "Ja esta na primeira fase"
+            back_block
+            or (f"Voltar para {prev.name}" if prev else "Ja esta na primeira fase")
         )
         self._btn_fwd.setToolTip(
-            f"Avancar para {nxt.name}" if nxt else "Ja esta na ultima fase"
+            fwd_block
+            or (f"Avancar para {nxt.name}" if nxt else "Ja esta na ultima fase")
         )
 
     def _step(self, delta: int) -> None:

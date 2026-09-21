@@ -452,12 +452,9 @@ class TaskService:
     # -- transicoes de fase (PONTO UNICO) ---------------------------------------
     #
     # Toda mudanca de fase passa por `check_move` + `move_phase`, e toda UI
-    # consulta `neighbors`. Quando existir o sistema de condicoes
-    # (ex: expressoes booleanas sobre atributos por fase), ele entra em
-    # `_check_conditions`, sem tocar UI nem `move_phase`:
-    #   - `neighbors` passa a ocultar/bloquear o destino com condicao falsa
-    #     (motivo em `blocked_reason`);
-    #   - `check_move` rejeita com o motivo da condicao.
+    # consulta `neighbors` (destinos) + `transition_block` (motivo, p/ tooltip).
+    # Condicoes de entrada vivem em `Phase.enter_conditions` e sao avaliadas
+    # em `_check_conditions`.
 
     def neighbors(self, task_id: int) -> tuple[Phase | None, Phase | None]:
         """(fase anterior, proxima fase) na ordem das fases. None nas pontas."""
@@ -477,7 +474,7 @@ class TaskService:
             return (prev, nxt)
 
     def check_move(self, task_id: int, phase_id: int) -> None:
-        """Valida uma transicao (levanta com o motivo se bloqueada)."""
+        """Valida uma transicao completa (vizinho, condicoes, obrigatorios)."""
         with UnitOfWork.open(self._db_path) as uow:
             task = uow.tasks.get(task_id)
             if task is None:
@@ -491,32 +488,65 @@ class TaskService:
                 return
             self._require_neighbor(uow, task, phase_id)
             self._check_conditions(uow, task, phase)
+            if phase.is_final:
+                self._require_required_attributes(uow, task)
+
+    def transition_block(self, task_id: int, phase_id: int) -> str | None:
+        """Motivo do bloqueio (p/ desabilitar botao com tooltip) ou None se livre."""
+        from task_level.domain import DomainError
+
+        try:
+            self.check_move(task_id, phase_id)
+        except DomainError as e:
+            return str(e)
+        return None
 
     @staticmethod
     def _check_conditions(uow: UnitOfWork, task: Task, phase: Phase) -> None:
-        """Hook p/ condicoes de transicao (FUTURO: expressoes sobre atributos).
+        """Avalia as condicoes de entrada da fase (todas precisam casar)."""
+        from task_level.services.filters import matches_attr, op_label
 
-        Hoje sempre permite. Quando implementado, deve levantar
-        ValidationError com o motivo (ex: "requer 'sev' preenchida").
-        """
-        _ = (uow, task, phase)
+        conditions = phase.enter_conditions or []
+        if not conditions:
+            return
+        assert task.id is not None
+        definitions = {
+            d.name: d for d in uow.attribute_definitions.list_by_task_type(
+                task.task_type_id
+            )
+        }
+        values = {
+            v.attribute_definition_id: v
+            for v in uow.task_attributes.list_by_task(task.id)
+        }
+        for cond in conditions:
+            name = cond.get("attr", "")
+            definition = definitions.get(name)
+            if definition is None or definition.id is None:
+                raise ValidationError(
+                    f"para entrar em '{phase.name}': atributo '{name}' nao existe mais"
+                )
+            value = values.get(definition.id)
+            if not matches_attr(
+                definition, value, cond.get("op", ""), str(cond.get("value", ""))
+            ):
+                label = op_label(definition.type, cond.get("op", ""))
+                want = f" {cond.get('value', '')}" if cond.get("value") else ""
+                raise ValidationError(
+                    f"para entrar em '{phase.name}': "
+                    f"'{definition.label}' precisa ser {label}{want}"
+                )
 
     def move_phase(self, task_id: int, phase_id: int) -> Task:
+        self.check_move(task_id, phase_id)  # valida tudo antes de aplicar
         with UnitOfWork.open(self._db_path) as uow:
             task = uow.tasks.get(task_id)
-            if task is None:
-                raise NotFoundError(f"task {task_id} nao encontrada")
+            assert task is not None
             phase = uow.phases.get(phase_id)
-            if phase is None:
-                raise NotFoundError(f"phase {phase_id} nao encontrada")
-            if phase.task_type_id != task.task_type_id:
-                raise ValidationError("phase pertence a outro task_type")
+            assert phase is not None
             if phase_id == task.phase_id:
                 return task  # ja esta nela: nada a fazer
-            self._require_neighbor(uow, task, phase_id)
-            self._check_conditions(uow, task, phase)
             if phase.is_final:
-                self._require_required_attributes(uow, task)
                 task.completed_at = utcnow()
             else:
                 task.completed_at = None

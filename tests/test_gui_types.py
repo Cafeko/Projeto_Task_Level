@@ -295,3 +295,32 @@ def test_drag_toggle_defaults_locked(qapp):
         assert dlg._phase_list.dragEnabled() is True
     finally:
         dlg.close()
+
+
+def test_phase_dialog_conditions_roundtrip(qapp):
+    from task_level.presentation.dialogs.phase_dialog import PhaseDialog
+
+    attrs = [
+        {
+            "type_id": 0,
+            "type_name": "",
+            "name": "nota",
+            "label": "Nota",
+            "type": "number",
+            "options": None,
+        }
+    ]
+    dlg = PhaseDialog(
+        None,
+        {"name": "Revisao", "enter_conditions": [{"attr": "x", "op": "eq", "value": "1"}]},
+        type_attrs=attrs,
+    )
+    try:
+        assert len(dlg._cond_rows) == 1  # preset carregada
+        dlg._add_cond_row()
+        row = dlg._cond_rows[-1]
+        row.set_data({"type_id": 0, "attr": "nota", "op": "gte", "value": "5"})
+        conds = dlg.data()["enter_conditions"]
+        assert {"attr": "nota", "op": "gte", "value": "5"} in conds
+    finally:
+        dlg.close()

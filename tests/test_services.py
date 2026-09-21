@@ -469,6 +469,40 @@ def test_phase_notes_crud(services):
         tasks.set_phase_note(task.id, 999999, "x")
 
 
+def test_phase_enter_conditions_block_and_release(services):
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    t = task_types.create_type(
+        p.id,
+        "T",
+        phases=[
+            {"name": "Novo", "is_initial": True},
+            {
+                "name": "Revisao",
+                "enter_conditions": [
+                    {"attr": "nota", "op": "gte", "value": "5"}
+                ],
+            },
+            {"name": "Pronto", "is_final": True},
+        ],
+        attributes=[{"name": "nota", "label": "Nota", "type": "number"}],
+    )
+    task = tasks.create_task(p.id, t.id, "T1", values={"nota": 2})
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(task_types._db_path) as uow:
+        ordered = sorted(uow.phases.list_by_task_type(t.id), key=lambda x: x.order)
+    review = ordered[1].id
+    assert tasks.transition_block(task.id, review) is not None
+    assert "Revisao" in tasks.transition_block(task.id, review)
+    with pytest.raises(ValidationError):
+        tasks.move_phase(task.id, review)
+    tasks.set_attribute(task.id, "nota", 8)
+    assert tasks.transition_block(task.id, review) is None
+    tasks.move_phase(task.id, review)
+    assert tasks.get(task.id).phase_id == review
+
+
 def test_list_filtered_by_attributes(services):
     projects, task_types, tasks = services
     p = projects.create("P1")

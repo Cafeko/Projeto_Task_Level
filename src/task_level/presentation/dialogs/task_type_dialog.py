@@ -189,14 +189,31 @@ class TaskTypeDialog(QDialog):
                 tags.append("inicio")
             if i == last:
                 tags.append("fim")
+            conds = spec.get("enter_conditions") or []
+            if conds:
+                tags.append(f"{len(conds)} condicao(oes)")
             suffix = f" [{', '.join(tags)}]" if tags else ""
             item = QListWidgetItem(f"{i}. {spec.get('name', '')}{suffix}")
             item.setData(Qt.UserRole, i)
             item.setIcon(make_color_icon(spec.get("color", "#888888")))
             self._phase_list.addItem(item)
 
+    def _type_attrs_for_conditions(self) -> list[dict]:
+        """Atributos do tipo em edicao (p/ condicoes de fase, por nome)."""
+        return [
+            {
+                "type_id": 0,
+                "type_name": "",
+                "name": a.get("name", ""),
+                "label": a.get("label", a.get("name", "")),
+                "type": a.get("type", "text"),
+                "options": a.get("options"),
+            }
+            for a in self._attrs
+        ]
+
     def _add_phase(self) -> None:
-        spec = PhaseDialog.create(self)
+        spec = PhaseDialog.create(self, type_attrs=self._type_attrs_for_conditions())
         if spec is not None:
             spec["order"] = len(self._phases)  # fim da fila, automatico
             self._phases.append(spec)
@@ -206,7 +223,9 @@ class TaskTypeDialog(QDialog):
         row = self._phase_list.currentRow()
         if row < 0:
             return
-        spec = PhaseDialog.edit(self, self._phases[row])
+        spec = PhaseDialog.edit(
+            self, self._phases[row], type_attrs=self._type_attrs_for_conditions()
+        )
         if spec is not None:
             spec["id"] = self._phases[row].get("id")  # preserva vinculo
             spec["order"] = row  # ordem e sempre a posicao

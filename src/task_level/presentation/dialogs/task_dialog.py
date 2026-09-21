@@ -236,16 +236,35 @@ class TaskDialog(QDialog):
             has_prev, has_next = pos > 0, pos < len(ids) - 1
             prev_name = self._phase_options[pos - 1].name if has_prev else ""
             next_name = self._phase_options[pos + 1].name if has_next else ""
+            prev_id = self._phase_options[pos - 1].id if has_prev else None
+            next_id = self._phase_options[pos + 1].id if has_next else None
         else:
             has_prev, has_next, prev_name, next_name = False, bool(ids), "", ""
+            prev_id, next_id = None, None
+        back_block = self._transition_block(prev_id) if has_prev else None
+        fwd_block = self._transition_block(next_id) if has_next else None
         self._btn_phase_back.setEnabled(has_prev)
         self._btn_phase_fwd.setEnabled(has_next)
         self._btn_phase_back.setToolTip(
-            f"Voltar para {prev_name}" if has_prev else "Ja esta na primeira fase"
+            back_block
+            or (f"Voltar para {prev_name}" if has_prev else "Ja esta na primeira fase")
         )
         self._btn_phase_fwd.setToolTip(
-            f"Avancar para {next_name}" if has_next else "Ja esta na ultima fase"
+            fwd_block
+            or (f"Avancar para {next_name}" if has_next else "Ja esta na ultima fase")
         )
+
+    def _transition_block(self, phase_id: int | None) -> str | None:
+        if phase_id is None or self._task_id is None:
+            return None
+        from task_level.domain import DomainError
+        from task_level.services import TaskService
+
+        try:
+            TaskService(self._db_path).check_move(self._task_id, phase_id)
+        except DomainError as e:
+            return str(e)
+        return None
 
     def _rebuild_attributes(self) -> None:
         type_id = self._current_type_id()
@@ -615,6 +634,15 @@ class TaskDialog(QDialog):
         if errors:
             QMessageBox.warning(self, "Validacao", "\n".join(errors))
             return
+        if self._task_id is not None:
+            target = self.payload()["phase_id"]
+            if target is not None and target != self._origin_phase_id:
+                block = self._transition_block(target)
+                if block is not None:
+                    QMessageBox.warning(self, "Nao e possivel mudar de fase", block)
+                    self._target_phase_id = self._origin_phase_id
+                    self._refresh_phase_stepper()
+                    return
         super().accept()
 
     # -- aplicacao via services -----------------------------------------------------

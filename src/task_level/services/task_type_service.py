@@ -83,6 +83,7 @@ class TaskTypeService:
                     order=int(spec.get("order", i)),
                     is_initial=bool(spec.get("is_initial", False)),
                     is_final=bool(spec.get("is_final", False)),
+                    enter_conditions=spec.get("enter_conditions"),
                 )
             )
 

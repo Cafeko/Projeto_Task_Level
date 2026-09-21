@@ -171,6 +171,7 @@ class Phase:
     order: int = 0
     is_initial: bool = False
     is_final: bool = False
+    enter_conditions: list[dict] | None = None  # [{attr, op, value}] p/ entrar
     id: int | None = None
     created_at: datetime = field(default_factory=utcnow)
 
@@ -178,6 +179,14 @@ class Phase:
         if not self.task_type_id or self.task_type_id <= 0:
             raise ValidationError("phase.task_type_id invalido")
         _require_non_empty(self.name, "phase.name")
+        if self.enter_conditions is not None:
+            if not isinstance(self.enter_conditions, list) or not all(
+                isinstance(c, dict)
+                and isinstance(c.get("attr"), str)
+                and isinstance(c.get("op"), str)
+                for c in self.enter_conditions
+            ):
+                raise ValidationError("phase.enter_conditions invalido")
 
 
 @dataclass

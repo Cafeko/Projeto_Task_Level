@@ -122,6 +122,7 @@ class TaskTypeManagerDialog(QDialog):
                     "order": p.order,
                     "is_initial": p.is_initial,
                     "is_final": p.is_final,
+                    "enter_conditions": p.enter_conditions,
                 }
                 for p in uow.phases.list_by_task_type(type_id)
             ]
@@ -134,6 +135,7 @@ class TaskTypeManagerDialog(QDialog):
                     "required": a.required,
                     "default_value": a.default_value,
                     "reference_config": a.reference_config,
+                    "options": a.options,
                     "order": a.order,
                 }
                 for a in uow.attribute_definitions.list_by_task_type(type_id)

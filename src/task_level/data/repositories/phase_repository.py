@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from task_level.domain import Phase, from_iso, to_iso
@@ -10,6 +11,7 @@ from .base import b2i, i2b
 
 
 def _to_model(row: sqlite3.Row) -> Phase:
+    raw_conditions = row["enter_conditions"] if "enter_conditions" in row.keys() else None
     return Phase(
         id=row["id"],
         task_type_id=row["task_type_id"],
@@ -19,6 +21,7 @@ def _to_model(row: sqlite3.Row) -> Phase:
         order=row["order"],
         is_initial=i2b(row["is_initial"]) or False,
         is_final=i2b(row["is_final"]) or False,
+        enter_conditions=json.loads(raw_conditions) if raw_conditions else None,
         created_at=from_iso(row["created_at"]),
     )
 
@@ -31,8 +34,8 @@ class PhaseRepository:
         phase.validate()
         cur = self._conn.execute(
             'INSERT INTO phases (task_type_id, name, description, color, "order",'
-            " is_initial, is_final, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " is_initial, is_final, enter_conditions, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 phase.task_type_id,
                 phase.name.strip(),
@@ -41,6 +44,9 @@ class PhaseRepository:
                 phase.order,
                 b2i(phase.is_initial),
                 b2i(phase.is_final),
+                json.dumps(phase.enter_conditions, ensure_ascii=False)
+                if phase.enter_conditions
+                else None,
                 to_iso(phase.created_at),
             ),
         )
@@ -74,7 +80,7 @@ class PhaseRepository:
             raise ValueError("phase.id obrigatorio para update")
         self._conn.execute(
             'UPDATE phases SET name = ?, description = ?, color = ?, "order" = ?,'
-            " is_initial = ?, is_final = ? WHERE id = ?",
+            " is_initial = ?, is_final = ?, enter_conditions = ? WHERE id = ?",
             (
                 phase.name.strip(),
                 phase.description,
@@ -82,6 +88,9 @@ class PhaseRepository:
                 phase.order,
                 b2i(phase.is_initial),
                 b2i(phase.is_final),
+                json.dumps(phase.enter_conditions, ensure_ascii=False)
+                if phase.enter_conditions
+                else None,
                 phase.id,
             ),
         )

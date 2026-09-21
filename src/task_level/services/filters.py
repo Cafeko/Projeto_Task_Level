@@ -72,6 +72,14 @@ def ops_for(attr_type: str) -> list[tuple[str, str, bool]]:
     return FILTER_OPS.get(attr_type, [])
 
 
+def op_label(attr_type: str, op_id: str) -> str:
+    """Rotulo do operador (p/ mensagens de bloqueio)."""
+    for oid, label, _needs in ops_for(attr_type):
+        if oid == op_id:
+            return label
+    return op_id
+
+
 def _text_of(definition, value_row) -> str | None:
     if value_row is None:
         return None
