@@ -39,3 +39,6 @@ uv run ruff check src tests       # lint
 - Botao **Filtros...** filtra tasks por valores de atributos (ex: Severidade
   contem "critica", Nota maior que 5); vale no Todos e no Kanban e zera ao
   trocar de tipo.
+- Botao **Foco...** escolhe atributos para exibir inline (colunas extras no
+  Por tipo e fase, detalhes no Recentes e no Kanban); salvo por projeto e
+  combina com os filtros.

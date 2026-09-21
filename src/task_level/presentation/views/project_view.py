@@ -7,11 +7,12 @@ Modo "Todos" tem duas visoes (escolha do usuario):
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -31,7 +32,8 @@ from PySide6.QtWidgets import (
 from task_level.data import UnitOfWork
 from task_level.domain import DomainError, to_local
 from task_level.presentation.dialogs.filter_dialog import FilterDialog
-from task_level.presentation.dialogs.task_dialog import TaskDialog
+from task_level.presentation.dialogs.focus_dialog import FocusDialog
+from task_level.presentation.dialogs.task_dialog import TaskDialog, format_attr_value
 from task_level.presentation.dialogs.task_type_manager_dialog import (
     TaskTypeManagerDialog,
 )
@@ -111,6 +113,9 @@ class ProjectView(QWidget):
         self._filters: list[dict] = []
         self._btn_filters = QPushButton("Filtros...")
         self._btn_filters.clicked.connect(self._open_filters)
+        self._focus: dict[str, list[str]] = {}
+        self._btn_focus = QPushButton("Foco...")
+        self._btn_focus.clicked.connect(self._open_focus)
         self._view_mode = QComboBox()
         self._view_mode.addItem("Por tipo e fase", VIEW_GROUPED)
         self._view_mode.addItem("Recentes", VIEW_RECENT)
@@ -125,6 +130,7 @@ class ProjectView(QWidget):
         top.addWidget(QLabel("Tipo:"))
         top.addWidget(self._type_filter)
         top.addWidget(self._btn_filters)
+        top.addWidget(self._btn_focus)
         self._view_label = QLabel("Visão:")
         top.addWidget(self._view_label)
         top.addWidget(self._view_mode)
@@ -169,7 +175,58 @@ class ProjectView(QWidget):
             return
         self.project_id = project_id
         self._title.setText(f"#{project.id} {project.name}")
+        self._load_focus()
+        self._update_focus_button()
         self._reload_types()
+
+    def _focus_settings_key(self) -> str:
+        return f"focus/project_{self.project_id}"
+
+    def _load_focus(self) -> None:
+        self._focus = {}
+        try:
+            raw = QSettings("TaskLevel", "task-level").value(
+                self._focus_settings_key(), "{}"
+            )
+            data = json.loads(raw) if isinstance(raw, str) else {}
+            if isinstance(data, dict):
+                self._focus = {
+                    str(k): [str(n) for n in v]
+                    for k, v in data.items()
+                    if isinstance(v, list)
+                }
+        except Exception:
+            self._focus = {}
+
+    def _save_focus(self) -> None:
+        QSettings("TaskLevel", "task-level").setValue(
+            self._focus_settings_key(), json.dumps(self._focus)
+        )
+
+    def _update_focus_button(self) -> None:
+        total = sum(len(v) for v in self._focus.values())
+        self._btn_focus.setText(f"Foco ({total})" if total else "Foco...")
+
+    def _open_focus(self) -> None:
+        if self.project_id is None:
+            return
+        scope = self._type_filter.currentData()
+        selected = self._focus.get(str(scope), []) if scope is not None else None
+        result = FocusDialog.edit(
+            self, self._db_path, self.project_id, scope, selected
+        )
+        if result is None:
+            return
+        scope_id, names = result
+        if scope_id is None:
+            return
+        if names:
+            self._focus[str(scope_id)] = names
+        else:
+            self._focus.pop(str(scope_id), None)
+        self._save_focus()
+        self._update_focus_button()
+        self._filter_changed()
 
     def _reload_types(self) -> None:
         keep_type_id = self._type_filter.currentData()
@@ -247,6 +304,37 @@ class ProjectView(QWidget):
             self._load_grouped_tree()
             self._all_stack.setCurrentWidget(self._grouped_tree)
 
+    def _focus_data(self, uow, tasks):
+        """Defs focadas por tipo + valores: ({tid: {name: def}}, {(task, def): val})."""
+        wanted = {t.task_type_id for t in tasks if str(t.task_type_id) in self._focus}
+        defs: dict = {}
+        for tid in wanted:
+            defs[tid] = {
+                d.name: d
+                for d in uow.attribute_definitions.list_by_task_type(tid)
+                if d.name in self._focus.get(str(tid), [])
+            }
+        vals: dict = {}
+        for t in tasks:
+            for v in uow.task_attributes.list_by_task(t.id):
+                vals[(t.id, v.attribute_definition_id)] = v
+        return defs, vals
+
+    def _focus_parts(self, task, defs, vals) -> list[str]:
+        """['Rotulo: valor', ...] dos atributos em foco (vazios pulados)."""
+        parts = []
+        for name in self._focus.get(str(task.task_type_id), []):
+            d = defs.get(task.task_type_id, {}).get(name)
+            if d is None or d.id is None:
+                continue
+            v = vals.get((task.id, d.id))
+            if v is None:
+                continue
+            text = format_attr_value(v, d.type)
+            if text:
+                parts.append(f"{d.label}: {text}")
+        return parts
+
     def _load_recent_list(self) -> None:
         self._all_list.clear()
         if self.project_id is None:
@@ -262,17 +350,21 @@ class ProjectView(QWidget):
                     self.project_id, None, self._filters
                 )
             )
+            focus_defs, focus_vals = self._focus_data(uow, tasks)
         for t in tasks:
             task_type = types.get(t.task_type_id)
             type_name = task_type.name if task_type else "?"
             type_icon = task_type.icon if task_type else ""
             type_color = task_type.color if task_type else None
             phase_name = phases[t.phase_id].name if t.phase_id in phases else "-"
-            item = QListWidgetItem(
-                f"[{type_label(type_name, type_icon)}] #{t.id} {t.title}  ({phase_name})"
-            )
+            text = f"[{type_label(type_name, type_icon)}] #{t.id} {t.title}  ({phase_name})"
+            parts = self._focus_parts(t, focus_defs, focus_vals)
+            if parts:
+                text += "  |  " + "  |  ".join(parts)
+            item = QListWidgetItem(text)
             item.setData(Qt.UserRole, t.id)
             item.setIcon(make_color_icon(type_color))
+            item.setToolTip(text)
             self._all_list.addItem(item)
 
     def _load_grouped_tree(self) -> None:
@@ -293,20 +385,39 @@ class ProjectView(QWidget):
             for tid in types:
                 for p in uow.phases.list_by_task_type(tid):
                     phases[p.id] = p
-            grouped = group_by_type_and_phase(
-                TaskService(self._db_path).list_filtered(
-                    self.project_id, None, self._filters
-                ),
-                phases,
+            tasks_all = TaskService(self._db_path).list_filtered(
+                self.project_id, None, self._filters
             )
-        for type_id in sorted(grouped, key=lambda i: types[i].name if i in types else "?"):
+            grouped = group_by_type_and_phase(tasks_all, phases)
+            focus_defs, focus_vals = self._focus_data(uow, tasks_all)
+        type_order = sorted(
+            grouped, key=lambda i: types[i].name if i in types else "?"
+        )
+        # colunas extras = atributos em foco (por tipo, na ordem das definicoes)
+        focus_cols: list = []
+        for tid in type_order:
+            for name in self._focus.get(str(tid), []):
+                d = focus_defs.get(tid, {}).get(name)
+                if d is not None:
+                    focus_cols.append((tid, d))
+        labels = [d.label for _, d in focus_cols]
+        headers = ["Task", "Fase", "Atualizada"] + [
+            label if labels.count(label) == 1 else f"{types[tid].name} / {label}"
+            for tid, d in focus_cols
+            for label in [d.label]
+        ]
+        self._grouped_tree.setHeaderLabels(headers)
+        tree_header = self._grouped_tree.header()
+        for col in range(len(headers)):
+            tree_header.setSectionResizeMode(col, QHeaderView.Interactive)
+        for type_id in type_order:
             task_type = types.get(type_id)
             type_name = task_type.name if task_type else "?"
             type_icon = task_type.icon if task_type else ""
             type_color = task_type.color if task_type else None
             items = grouped[type_id]
             header_text = f"{type_label(type_name, type_icon)} ({len(items)})"
-            header = QTreeWidgetItem([header_text, "", ""])
+            header = QTreeWidgetItem([header_text] + [""] * (len(headers) - 1))
             header.setData(0, Qt.UserRole, None)
             header.setData(0, Qt.UserRole + 1, type_id)
             header.setToolTip(0, header_text)
@@ -336,13 +447,24 @@ class ProjectView(QWidget):
                     else "-"
                 )
                 child_text = f"#{t.id} {t.title}"
-                child = QTreeWidgetItem([child_text, phase_name, stamp])
+                cells = [child_text, phase_name, stamp]
+                for tid, d in focus_cols:
+                    cell = ""
+                    if tid == t.task_type_id and d.id is not None:
+                        v = focus_vals.get((t.id, d.id))
+                        if v is not None:
+                            cell = format_attr_value(v, d.type)
+                    cells.append(cell)
+                child = QTreeWidgetItem(cells)
                 child.setData(0, Qt.UserRole, t.id)
                 child.setToolTip(0, child_text)
                 child.setToolTip(1, phase_name)
                 child.setToolTip(2, full_stamp)
+                for col in range(3, len(cells)):
+                    if cells[col]:
+                        child.setToolTip(col, cells[col])
                 header.addChild(child)
-        for col in range(3):
+        for col in range(len(headers)):
             self._grouped_tree.resizeColumnToContents(col)
 
     def _open_from_list(self, item: QListWidgetItem) -> None:
@@ -369,6 +491,7 @@ class ProjectView(QWidget):
             type_id,
             on_changed=self._board_changed,
             filters=self._filters,
+            focus=self._focus.get(str(type_id), []),
         )
         self._board_layout.addWidget(board)
         self._stack.setCurrentWidget(self._board_host)

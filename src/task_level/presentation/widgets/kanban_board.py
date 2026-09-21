@@ -34,6 +34,7 @@ class KanbanBoard(QWidget):
         task_type_id: int,
         on_changed: Callable[[], None] | None = None,
         filters: list[dict] | None = None,
+        focus: list[str] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -42,6 +43,7 @@ class KanbanBoard(QWidget):
         self._task_type_id = task_type_id
         self._on_changed = on_changed
         self._filters: list[dict] = list(filters or [])
+        self._focus: list[str] = list(focus or [])
         self._columns: list[tuple[int, QLabel, QListWidget]] = []
 
         self._inner = QWidget()
@@ -80,12 +82,25 @@ class KanbanBoard(QWidget):
 
         with UnitOfWork.open(self._db_path) as uow:
             phases = uow.phases.list_by_task_type(self._task_type_id)
-        tasks = TaskService(self._db_path).list_filtered(
-            self._project_id, self._task_type_id, self._filters
-        )
+            focus_defs = {
+                d.name: d
+                for d in uow.attribute_definitions.list_by_task_type(
+                    self._task_type_id
+                )
+                if d.name in self._focus
+            }
+            focus_vals: dict = {}
+            tasks = TaskService(self._db_path).list_filtered(
+                self._project_id, self._task_type_id, self._filters
+            )
+            for t in tasks:
+                for v in uow.task_attributes.list_by_task(t.id):
+                    focus_vals[(t.id, v.attribute_definition_id)] = v
         by_phase: dict[int | None, list] = {}
         for t in tasks:
             by_phase.setdefault(t.phase_id, []).append(t)
+
+        from task_level.presentation.dialogs.task_dialog import format_attr_value
 
         for phase in phases:
             header = QLabel("")
@@ -114,8 +129,20 @@ class KanbanBoard(QWidget):
             items = by_phase.get(phase.id, [])
             header.setText(f"{phase.name} ({len(items)})")
             for t in items:
-                item = QListWidgetItem(f"#{t.id} {t.title}")
+                lines = [f"#{t.id} {t.title}"]
+                for name in self._focus:
+                    d = focus_defs.get(name)
+                    if d is None or d.id is None:
+                        continue
+                    v = focus_vals.get((t.id, d.id))
+                    if v is None:
+                        continue
+                    text = format_attr_value(v, d.type)
+                    if text:
+                        lines.append(f"{d.label}: {text}")
+                item = QListWidgetItem("\n".join(lines))
                 item.setData(Qt.UserRole, t.id)
+                item.setToolTip("\n".join(lines))
                 lst.addItem(item)
             self._columns.append((phase.id, header, lst))
         self._refresh_nav()

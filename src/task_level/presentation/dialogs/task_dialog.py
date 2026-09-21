@@ -35,7 +35,7 @@ from task_level.presentation.dialogs.reference_attribute_picker import (
 )
 
 
-def _format_attr_value(attr, attr_type: str | None = None) -> str:
+def format_attr_value(attr, attr_type: str | None = None) -> str:
     """Texto curto do valor de um TaskAttribute (p/ exibir em combos/resumos)."""
     from task_level.domain import AttributeType, format_currency, format_date
 
@@ -497,7 +497,7 @@ class TaskDialog(QDialog):
             d = definitions.get(attr.attribute_definition_id)
             name = d.label if d else f"#{attr_id}"
             dtype = d.type if d else None
-            return f"#{task_id} {task.title} - {name} = {_format_attr_value(attr, dtype)}"
+            return f"#{task_id} {task.title} - {name} = {format_attr_value(attr, dtype)}"
 
     def _eligible_ref_tasks(self, definition) -> list[tuple[int, str]]:
         """Tasks do projeto que ja tem valor no atributo fixo (referenciaveis).
@@ -528,7 +528,7 @@ class TaskDialog(QDialog):
                 if value is None:
                     continue  # sem valor ainda: nada a referenciar
                 tname = type_names.get(t.task_type_id, "?")
-                shown = _format_attr_value(value, target_def.type)
+                shown = format_attr_value(value, target_def.type)
                 eligible.append(
                     (t.id, f"[{tname}] #{t.id} {t.title} — {target_def.label} = {shown}")
                 )
