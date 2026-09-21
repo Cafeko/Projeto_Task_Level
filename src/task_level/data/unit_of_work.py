@@ -7,6 +7,7 @@ from pathlib import Path
 from types import TracebackType
 
 from . import database
+from .repositories.activity_log_repository import ActivityLogRepository
 from .repositories.attribute_definition_repository import AttributeDefinitionRepository
 from .repositories.phase_repository import PhaseRepository
 from .repositories.project_repository import ProjectRepository
@@ -26,6 +27,7 @@ class UnitOfWork:
         self.tasks = TaskRepository(conn)
         self.task_attributes = TaskAttributeRepository(conn)
         self.phase_notes = TaskPhaseNoteRepository(conn)
+        self.activity = ActivityLogRepository(conn)
 
     @classmethod
     def open(cls, db_path: str | Path) -> UnitOfWork:

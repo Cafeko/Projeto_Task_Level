@@ -287,6 +287,25 @@ class TaskPhaseNote:
             raise ValidationError("task_phase_note.phase_id invalido")
 
 
+@dataclass
+class ActivityEntry:
+    """Uma mudanca registrada (Historico; undo_json p/ desfazer/refazer)."""
+
+    project_id: int
+    action: str
+    task_id: int | None = None
+    task_title: str = ""
+    summary: str = ""
+    undo_json: str | None = None
+    id: int | None = None
+    created_at: datetime = field(default_factory=utcnow)
+
+    def validate(self) -> None:
+        if not self.project_id or self.project_id <= 0:
+            raise ValidationError("activity.project_id invalido")
+        _require_non_empty(self.action, "activity.action")
+
+
 def expected_fields() -> list[str]:    return [
         "value_text",
         "value_number",

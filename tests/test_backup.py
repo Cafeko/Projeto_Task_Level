@@ -68,8 +68,12 @@ def test_backup_and_restore_includes_attachments(tmp_path):
     backup = backup_db(db, dest)
     assert (dest / (backup.stem + "_files")).is_dir()
 
-    svc.clear_attribute(task.id, "doc")  # apaga anexo atual
-    assert not any(p.is_file() for p in attachments_root(db).rglob("*"))
+    svc.clear_attribute(task.id, "doc")  # apaga anexo atual (vai p/ lixeira)
+    live = [
+        p for p in attachments_root(db).rglob("*")
+        if p.is_file() and ".trash" not in p.parts
+    ]
+    assert live == []
 
     restore_db(db, backup)
     from task_level.data import UnitOfWork as _UoW

@@ -3,6 +3,7 @@
 from .enums import AttributeType
 from .exceptions import CircularReferenceError, DomainError, NotFoundError, ValidationError
 from .models import (
+    ActivityEntry,
     AttributeDefinition,
     Phase,
     Project,
@@ -22,6 +23,7 @@ from .models import (
 )
 
 __all__ = [
+    "ActivityEntry",
     "AttributeDefinition",
     "AttributeType",
     "CircularReferenceError",

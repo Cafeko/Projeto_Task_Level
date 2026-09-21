@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from task_level.data import UnitOfWork
 from task_level.domain import (
+    ActivityEntry,
     AttributeType,
     CircularReferenceError,
     NotFoundError,
@@ -46,6 +48,340 @@ class TaskService:
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = db_path
 
+    # -- historico + desfazer/refazer -----------------------------------------
+
+    def _undo_manager(self):
+        from task_level.services.undo import UndoManager
+
+        return UndoManager.for_db(self._db_path)
+
+    def _record(
+        self,
+        project_id: int,
+        action: str,
+        task_id: int | None,
+        task_title: str,
+        summary: str,
+        label: str = "",
+        undo_op: dict | None = None,
+        redo_op: dict | None = None,
+    ) -> None:
+        """Loga a mudanca e empilha undo/redo (nada faz se suspenso)."""
+        manager = self._undo_manager()
+        if manager.suspended:
+            return
+        log: dict | None = None
+        undo_json = None
+        if undo_op is not None and redo_op is not None:
+            log = {
+                "project_id": project_id,
+                "action": action,
+                "task_id": task_id,
+                "task_title": task_title,
+                "summary": summary,
+                "log_id": None,
+            }
+            manager.push(label or summary, undo_op, redo_op, log=log)
+            undo_json = json.dumps(
+                {"label": label or summary, "undo": undo_op, "redo": redo_op},
+                ensure_ascii=False,
+                default=str,
+            )
+        with UnitOfWork.open(self._db_path) as uow:
+            entry = uow.activity.add(
+                ActivityEntry(
+                    project_id=project_id,
+                    action=action,
+                    task_id=task_id,
+                    task_title=task_title,
+                    summary=summary,
+                    undo_json=undo_json,
+                )
+            )
+            if log is not None and entry.id is not None:
+                log["log_id"] = entry.id
+
+    def _delete_log(self, log_id: int) -> None:
+        with UnitOfWork.open(self._db_path) as uow:
+            uow.conn.execute("DELETE FROM activity_log WHERE id = ?", (log_id,))
+
+    def _reinsert_log(self, log: dict, entry: dict) -> int | None:
+        undo_json = json.dumps(
+            {"label": entry["label"], "undo": entry["undo"], "redo": entry["redo"]},
+            ensure_ascii=False,
+            default=str,
+        )
+        with UnitOfWork.open(self._db_path) as uow:
+            new_entry = uow.activity.add(
+                ActivityEntry(
+                    project_id=log["project_id"],
+                    action=log["action"],
+                    task_id=log["task_id"],
+                    task_title=log["task_title"],
+                    summary=log["summary"],
+                    undo_json=undo_json,
+                )
+            )
+            return new_entry.id
+
+    @staticmethod
+    def _raw_of(def_type: str, row) -> Any:
+        """Valor python bruto a partir da linha (p/ snapshots de undo)."""
+        if row is None:
+            return None
+        if def_type in (
+            AttributeType.TEXT.value,
+            AttributeType.DATE.value,
+            AttributeType.FILE.value,
+            AttributeType.SELECT.value,
+        ):
+            return row.value_text
+        if def_type in (AttributeType.NUMBER.value, AttributeType.CURRENCY.value):
+            return row.value_number
+        if def_type == AttributeType.BOOLEAN.value:
+            return row.value_boolean
+        if def_type == AttributeType.REFERENCE_TASK.value:
+            return row.value_reference_task_id
+        if def_type == AttributeType.REFERENCE_ATTRIBUTE.value:
+            if row.value_reference_attribute_id is None:
+                return None
+            return [row.value_reference_task_id, row.value_reference_attribute_id]
+        return None
+
+    @staticmethod
+    def _raw_equal(def_type: str, old: Any, new: Any) -> bool:
+        """Compara valores normalizados (None ~ False no booleano, 1 vs 1.0)."""
+        if def_type == AttributeType.BOOLEAN.value:
+            return bool(old) == bool(new)
+        if isinstance(old, float) and isinstance(new, int):
+            return old == float(new)
+        if isinstance(old, int) and isinstance(new, float):
+            return float(old) == new
+        if isinstance(old, tuple):
+            old = list(old)
+        if isinstance(new, tuple):
+            new = list(new)
+        # texto / data / select: ignora espacos ao redor
+        if isinstance(old, str) and isinstance(new, str):
+            return old.strip() == new.strip()
+        return old == new
+
+    @staticmethod
+    def _short_value(def_type: str, raw: Any) -> str:
+        if raw is None:
+            return "-"
+        if def_type == AttributeType.BOOLEAN.value:
+            return "sim" if raw else "nao"
+        if def_type in (AttributeType.NUMBER.value, AttributeType.CURRENCY.value):
+            return str(raw)
+        if def_type == AttributeType.FILE.value:
+            return Path(str(raw)).name
+        if def_type == AttributeType.REFERENCE_TASK.value:
+            return f"#{raw}"
+        if def_type == AttributeType.REFERENCE_ATTRIBUTE.value:
+            return f"#{raw[0]} atributo" if isinstance(raw, list) else str(raw)
+        text = str(raw).strip().replace("\n", " ")
+        return text if len(text) <= 40 else text[:39] + "…"
+
+    def _read_attr_raw(self, task_id: int, attr_name: str):
+        """(definition, raw) atuais ou (None, None)."""
+        with UnitOfWork.open(self._db_path) as uow:
+            task = uow.tasks.get(task_id)
+            if task is None:
+                return None, None
+            definition = uow.attribute_definitions.get_by_name(
+                task.task_type_id, attr_name
+            )
+            if definition is None or definition.id is None:
+                return None, None
+            row = uow.task_attributes.get(task_id, definition.id)
+            return definition, self._raw_of(definition.type, row)
+
+    def _snapshot_task(self, task_id: int) -> dict:
+        """Foto completa da task (linhas brutas, p/ desfazer exclusao)."""
+        with UnitOfWork.open(self._db_path) as uow:
+            task = uow.tasks.get(task_id)
+            if task is None:
+                raise NotFoundError(f"task {task_id} nao encontrada")
+            conn = uow.conn
+            return {
+                "task": dict(
+                    conn.execute(
+                        "SELECT * FROM tasks WHERE id = ?", (task_id,)
+                    ).fetchone()
+                ),
+                "attrs": [
+                    dict(r)
+                    for r in conn.execute(
+                        "SELECT * FROM task_attributes WHERE task_id = ?", (task_id,)
+                    ).fetchall()
+                ],
+                "notes": [
+                    dict(r)
+                    for r in conn.execute(
+                        "SELECT * FROM task_phase_notes WHERE task_id = ?", (task_id,)
+                    ).fetchall()
+                ],
+            }
+
+    def _restore_task(self, snap: dict) -> None:
+        """Recria task do snapshot com os mesmos ids (+ arquivos da lixeira)."""
+        from task_level.data.files import untrash
+
+        with UnitOfWork.open(self._db_path) as uow:
+            conn = uow.conn
+            t = snap["task"]
+            conn.execute(
+                "INSERT INTO tasks (id, project_id, task_type_id, phase_id, title,"
+                " description, created_at, updated_at, completed_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    t["id"], t["project_id"], t["task_type_id"], t["phase_id"],
+                    t["title"], t["description"], t["created_at"], t["updated_at"],
+                    t["completed_at"],
+                ),
+            )
+            for a in snap.get("attrs", []):
+                conn.execute(
+                    "INSERT INTO task_attributes (id, task_id, attribute_definition_id,"
+                    " value_text, value_number, value_boolean,"
+                    " value_reference_task_id, value_reference_attribute_id,"
+                    " created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        a["id"], a["task_id"], a["attribute_definition_id"],
+                        a["value_text"], a["value_number"], a["value_boolean"],
+                        a["value_reference_task_id"],
+                        a["value_reference_attribute_id"],
+                        a["created_at"], a["updated_at"],
+                    ),
+                )
+            for n in snap.get("notes", []):
+                conn.execute(
+                    "INSERT INTO task_phase_notes (id, task_id, phase_id, note,"
+                    " created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        n["id"], n["task_id"], n["phase_id"], n["note"],
+                        n["created_at"], n["updated_at"],
+                    ),
+                )
+        for entry in snap.get("files", []):
+            untrash(entry.get("trash"), entry.get("path"))
+
+    def _delete_with_snapshot(self, task_id: int) -> dict:
+        """Apaga a task (anexos vao p/ lixeira) e devolve snapshot p/ undo."""
+        from task_level.data.files import remove_task_files, trash_file
+
+        snap = self._snapshot_task(task_id)
+        trash_map = []
+        with UnitOfWork.open(self._db_path) as uow:
+            task = uow.tasks.get(task_id)
+            assert task is not None
+            for definition in uow.attribute_definitions.list_by_task_type(
+                task.task_type_id
+            ):
+                if definition.type != AttributeType.FILE.value:
+                    continue
+                assert definition.id is not None
+                row = uow.task_attributes.get(task_id, definition.id)
+                if row is not None and row.value_text:
+                    trashed = trash_file(self._db_path, row.value_text)
+                    trash_map.append({"path": row.value_text, "trash": trashed})
+            uow.tasks.delete(task_id)
+        remove_task_files(self._db_path, task_id)  # pasta (ja esvaziada)
+        snap["files"] = trash_map
+        return snap
+
+    def _apply_history_op(self, op: dict) -> None:
+        """Executa uma op de undo/redo (com hold ativo: sem log/pilha)."""
+        from task_level.data.files import trash_file, untrash
+
+        kind = op.get("k")
+        if kind == "set_details":
+            with UnitOfWork.open(self._db_path) as uow:
+                task = uow.tasks.get(op["task"])
+                assert task is not None
+                cur = (task.title, task.description)
+            self.update_details(op["task"], op["title"], op["description"])
+            op["title"], op["description"] = cur
+        elif kind == "set_attr":
+            _def, cur_raw = self._read_attr_raw(op["task"], op["attr"])
+            self.set_attribute(op["task"], op["attr"], op["value"])
+            if cur_raw is None:
+                op.pop("value", None)
+                op["k"] = "clear_attr"
+            else:
+                op["value"] = cur_raw
+        elif kind == "clear_attr":
+            _def, cur_raw = self._read_attr_raw(op["task"], op["attr"])
+            self.clear_attribute(op["task"], op["attr"])
+            if cur_raw is not None:
+                op["k"] = "set_attr"
+                op["value"] = cur_raw
+        elif kind == "set_file":
+            _def, cur_raw = self._read_attr_raw(op["task"], op["attr"])
+            cur_trash = (
+                trash_file(self._db_path, cur_raw)
+                if cur_raw and cur_raw != op["path"]
+                else None
+            )
+            untrash(op.get("trash"), op["path"])
+            with UnitOfWork.open(self._db_path) as uow:
+                task = uow.tasks.get(op["task"])
+                assert task is not None
+                definition = uow.attribute_definitions.get_by_name(
+                    task.task_type_id, op["attr"]
+                )
+                assert definition is not None and definition.id is not None
+                uow.task_attributes.set(
+                    TaskAttribute(
+                        op["task"], definition.id, value_text=op["path"]
+                    ),
+                    definition.type,
+                )
+            if cur_raw is None:
+                op["k"] = "clear_file"
+                op.pop("path", None)
+                op.pop("trash", None)
+            else:
+                op["path"], op["trash"] = cur_raw, cur_trash
+        elif kind == "clear_file":
+            _def, cur_raw = self._read_attr_raw(op["task"], op["attr"])
+            if cur_raw is None:
+                pass  # ja vazio: noop nos dois sentidos
+            else:
+                cur_trash = trash_file(self._db_path, cur_raw)
+                with UnitOfWork.open(self._db_path) as uow:
+                    task = uow.tasks.get(op["task"])
+                    assert task is not None
+                    definition = uow.attribute_definitions.get_by_name(
+                        task.task_type_id, op["attr"]
+                    )
+                    assert definition is not None and definition.id is not None
+                    uow.task_attributes.delete(op["task"], definition.id)
+                op["k"] = "set_file"
+                op["path"], op["trash"] = cur_raw, cur_trash
+        elif kind == "move":
+            cur_phase = self.get(op["task"]).phase_id
+            self.move_phase(op["task"], op["phase"])
+            op["phase"] = cur_phase
+        elif kind == "delete_task":
+            snap = self._delete_with_snapshot(op["task"])
+            op["k"] = "restore_task"
+            op["snapshot"] = snap
+            op.pop("task", None)
+        elif kind == "restore_task":
+            self._restore_task(op["snapshot"])
+            op["k"] = "delete_task"
+            op["task"] = op["snapshot"]["task"]["id"]
+            op.pop("snapshot", None)
+        elif kind == "set_note":
+            cur = self.phase_notes(op["task"]).get(op["phase"])
+            self.set_phase_note(op["task"], op["phase"], op.get("note") or "")
+            op["note"] = cur
+        else:
+            raise ValidationError(f"operacao de historico desconhecida: {kind!r}")
+
     # -- criacao/listagem -------------------------------------------------
 
     def create_task(
@@ -77,7 +413,18 @@ class TaskService:
             assert task.id is not None
             for name, value in (values or {}).items():
                 self._set_attribute(uow, task.id, task_type_id, name, value)
-            return task
+            created = task
+        self._record(
+            project_id,
+            "created",
+            created.id,
+            created.title,
+            f"#{created.id} {created.title} criada",
+            label=f"criar '{created.title}'",
+            undo_op={"k": "delete_task", "task": created.id},
+            redo_op={"k": "restore_task", "snapshot": self._snapshot_task(created.id)},
+        )
+        return created
 
     def list_by_project(
         self,
@@ -155,12 +502,21 @@ class TaskService:
 
     def delete(self, task_id: int) -> None:
         with UnitOfWork.open(self._db_path) as uow:
-            if uow.tasks.get(task_id) is None:
+            task = uow.tasks.get(task_id)
+            if task is None:
                 raise NotFoundError(f"task {task_id} nao encontrada")
-            uow.tasks.delete(task_id)
-        from task_level.data.files import remove_task_files
-
-        remove_task_files(self._db_path, task_id)
+            project_id, title = task.project_id, task.title
+        snap = self._delete_with_snapshot(task_id)
+        self._record(
+            project_id,
+            "deleted",
+            None,
+            title,
+            f"#{task_id} {title} excluida",
+            label=f"excluir '{title}'",
+            undo_op={"k": "restore_task", "snapshot": snap},
+            redo_op={"k": "delete_task", "task": task_id},
+        )
 
     def resolve_reference_attribute(
         self, task_id: int, attribute_name: str
@@ -190,15 +546,49 @@ class TaskService:
             task = uow.tasks.get(task_id)
             if task is None:
                 raise NotFoundError(f"task {task_id} nao encontrada")
+            old = (task.title, task.description)
+            project_id = task.project_id
             task.title = title
             task.description = description
             task.updated_at = utcnow()
             uow.tasks.update(task)
-            return task
+        if old != (title, description):
+            details: list[str] = []
+            if old[0] != title:
+                s_old = self._short_value("text", old[0])
+                s_new = self._short_value("text", title)
+                details.append(f"titulo '{s_old}' → '{s_new}'")
+            if old[1] != description:
+                if not old[1] and description:
+                    s_new = self._short_value("text", description)
+                    details.append(f"descricao definida: '{s_new}'")
+                elif old[1] and not description:
+                    details.append("descricao removida")
+                else:
+                    s_old = self._short_value("text", old[1])
+                    s_new = self._short_value("text", description)
+                    details.append(f"descricao '{s_old}' → '{s_new}'")
+            self._record(
+                project_id,
+                "updated",
+                task_id,
+                title,
+                f"#{task_id} editada: " + ", ".join(details) if details else f"#{task_id} editada",
+                label=f"editar '{title}'",
+                undo_op={
+                    "k": "set_details", "task": task_id,
+                    "title": old[0], "description": old[1],
+                },
+                redo_op={
+                    "k": "set_details", "task": task_id,
+                    "title": title, "description": description,
+                },
+            )
+        return task
 
     def clear_attribute(self, task_id: int, attr_name: str) -> None:
-        """Remove o valor de um atributo (apaga o anexo se for arquivo)."""
-        from task_level.data.files import remove_file
+        """Remove o valor de um atributo (anexo vai p/ lixeira se for arquivo)."""
+        from task_level.data.files import trash_file
 
         with UnitOfWork.open(self._db_path) as uow:
             task = uow.tasks.get(task_id)
@@ -210,11 +600,38 @@ class TaskService:
             if definition is None:
                 raise NotFoundError(f"atributo '{attr_name}' nao existe neste tipo")
             assert definition.id is not None
+            project_id = task.project_id
+            existing = uow.task_attributes.get(task_id, definition.id)
+            if existing is None:
+                return  # nada a fazer
+            old_raw = self._raw_of(definition.type, existing)
+            old_trash = None
             if definition.type == AttributeType.FILE.value:
-                existing = uow.task_attributes.get(task_id, definition.id)
-                if existing is not None:
-                    remove_file(existing.value_text)
+                old_trash = trash_file(self._db_path, existing.value_text)
             uow.task_attributes.delete(task_id, definition.id)
+        short = self._short_value(definition.type, old_raw)
+        if definition.type == AttributeType.FILE.value:
+            undo_op: dict = {
+                "k": "set_file", "task": task_id, "attr": attr_name,
+                "path": old_raw, "trash": old_trash,
+            }
+            redo_op = {"k": "clear_file", "task": task_id, "attr": attr_name}
+        else:
+            undo_op = {
+                "k": "set_attr", "task": task_id, "attr": attr_name,
+                "value": old_raw,
+            }
+            redo_op = {"k": "clear_attr", "task": task_id, "attr": attr_name}
+        self._record(
+            project_id,
+            "attribute",
+            task_id,
+            task.title,
+            f"#{task_id} '{definition.label}' removido (era {short})",
+            label=f"limpar '{definition.label}'",
+            undo_op=undo_op,
+            redo_op=redo_op,
+        )
 
     def phase_notes(self, task_id: int) -> dict[int, str]:
         """Observacoes da task por fase: {phase_id: note} (so as preenchidas)."""
@@ -236,16 +653,40 @@ class TaskService:
                 raise NotFoundError(f"phase {phase_id} nao encontrada")
             if phase.task_type_id != task.task_type_id:
                 raise ValidationError("phase pertence a outro task_type")
+            old = uow.phase_notes.get(task_id, phase_id)
+            old_note = old.note if old else None
+            project_id, title, phase_name = task.project_id, task.title, phase.name
             if not note.strip():
                 uow.phase_notes.delete(task_id, phase_id)
             else:
                 uow.phase_notes.set(TaskPhaseNote(task_id, phase_id, note.strip()))
+        new_note = note.strip() or None
+        if old_note != new_note:
+            shown = (new_note[:60] + "…") if new_note and len(new_note) > 60 else (
+                new_note or "apagada"
+            )
+            self._record(
+                project_id,
+                "note",
+                task_id,
+                title,
+                f"#{task_id} observacao em '{phase_name}': {shown}",
+                label=f"observacao em '{phase_name}'",
+                undo_op={
+                    "k": "set_note", "task": task_id, "phase": phase_id,
+                    "note": old_note,
+                },
+                redo_op={
+                    "k": "set_note", "task": task_id, "phase": phase_id,
+                    "note": new_note,
+                },
+            )
 
     def set_file_attribute(
         self, task_id: int, attr_name: str, source: str | Path
     ) -> TaskAttribute:
         """Anexa arquivo: copia p/ area gerenciada e salva o caminho."""
-        from task_level.data.files import store_attachment
+        from task_level.data.files import store_attachment, trash_file
 
         with UnitOfWork.open(self._db_path) as uow:
             task = uow.tasks.get(task_id)
@@ -265,24 +706,83 @@ class TaskService:
             assert task.id is not None
             dest = store_attachment(self._db_path, task.id, attr_name, src)
             old = uow.task_attributes.get(task.id, definition.id)
+            old_path = old.value_text if old else None
+            old_trash = None
             attr = self._build_attribute(
                 uow, task.id, definition.id, definition.type, str(dest)
             )
             saved = uow.task_attributes.set(attr, definition.type)
-            if old is not None and old.value_text and old.value_text != str(dest):
-                from task_level.data.files import remove_file
-
-                remove_file(old.value_text)
-            return saved
+            if old_path and old_path != str(dest):
+                old_trash = trash_file(self._db_path, old_path)
+            project_id, title, label = task.project_id, task.title, definition.label
+        if old_path is None:
+            undo_op: dict = {"k": "clear_file", "task": task_id, "attr": attr_name}
+        else:
+            undo_op = {
+                "k": "set_file", "task": task_id, "attr": attr_name,
+                "path": old_path, "trash": old_trash,
+            }
+        self._record(
+            project_id,
+            "attribute",
+            task_id,
+            title,
+            f"#{task_id} '{label}': anexo {Path(str(dest)).name}",
+            label=f"anexar em '{label}'",
+            undo_op=undo_op,
+            redo_op={
+                "k": "set_file", "task": task_id, "attr": attr_name,
+                "path": str(dest), "trash": None,
+            },
+        )
+        return saved
 
     # -- atributos ----------------------------------------------------------
 
     def set_attribute(self, task_id: int, attr_name: str, value: Any) -> TaskAttribute:
+        definition, old_raw = self._read_attr_raw(task_id, attr_name)
+        if definition is None:
+            with UnitOfWork.open(self._db_path) as uow:
+                task = uow.tasks.get(task_id)
+                if task is None:
+                    raise NotFoundError(f"task {task_id} nao encontrada")
+            raise NotFoundError(f"atributo '{attr_name}' nao existe neste tipo")
         with UnitOfWork.open(self._db_path) as uow:
             task = uow.tasks.get(task_id)
-            if task is None:
-                raise NotFoundError(f"task {task_id} nao encontrada")
-            return self._set_attribute(uow, task_id, task.task_type_id, attr_name, value)
+            assert task is not None
+            assert definition.id is not None
+            built = self._build_attribute(
+                uow, task_id, definition.id, definition.type, value
+            )
+            new_raw = self._raw_of(definition.type, built)
+            if self._raw_equal(definition.type, old_raw, new_raw):
+                old_row = uow.task_attributes.get(task_id, definition.id)
+                return old_row if old_row is not None else built
+            saved = uow.task_attributes.set(built, definition.type)
+            project_id, title = task.project_id, task.title
+        short_old = self._short_value(definition.type, old_raw)
+        short_new = self._short_value(definition.type, value)
+        if old_raw is None:
+            undo_op: dict = {"k": "clear_attr", "task": task_id, "attr": attr_name}
+        else:
+            undo_op = {
+                "k": "set_attr", "task": task_id, "attr": attr_name,
+                "value": old_raw,
+            }
+        self._record(
+            project_id,
+            "attribute",
+            task_id,
+            title,
+            f"#{task_id} '{definition.label}': {short_old} → {short_new}",
+            label=f"editar '{definition.label}'",
+            undo_op=undo_op,
+            redo_op={
+                "k": "set_attr", "task": task_id, "attr": attr_name,
+                "value": value,
+            },
+        )
+        return saved
 
     def _set_attribute(
         self,
@@ -538,6 +1038,12 @@ class TaskService:
                 )
 
     def move_phase(self, task_id: int, phase_id: int) -> Task:
+        with UnitOfWork.open(self._db_path) as uow:
+            before = uow.tasks.get(task_id)
+            old_phase_id = before.phase_id if before else None
+            names = {p.id: p.name for p in (
+                uow.phases.list_by_task_type(before.task_type_id) if before else []
+            )}
         self.check_move(task_id, phase_id)  # valida tudo antes de aplicar
         with UnitOfWork.open(self._db_path) as uow:
             task = uow.tasks.get(task_id)
@@ -553,7 +1059,26 @@ class TaskService:
             task.phase_id = phase_id
             task.updated_at = utcnow()
             uow.tasks.update(task)
-            return task
+            project_id, title = task.project_id, task.title
+        if old_phase_id != phase_id:
+            undo: dict | None = (
+                {"k": "move", "task": task_id, "phase": old_phase_id}
+                if old_phase_id is not None
+                else None
+            )
+            redo: dict | None = {"k": "move", "task": task_id, "phase": phase_id}
+            self._record(
+                project_id,
+                "moved",
+                task_id,
+                title,
+                f"#{task_id} fase {names.get(old_phase_id, '?')} → "
+                f"{names.get(phase_id, '?')}",
+                label=f"mover '{title}'",
+                undo_op=undo,
+                redo_op=redo,
+            )
+        return task
 
     @staticmethod
     def _require_neighbor(uow: UnitOfWork, task: Task, phase_id: int) -> None:

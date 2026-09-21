@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -33,6 +34,7 @@ from task_level.data import UnitOfWork
 from task_level.domain import DomainError, to_local
 from task_level.presentation.dialogs.filter_dialog import FilterDialog
 from task_level.presentation.dialogs.focus_dialog import FocusDialog
+from task_level.presentation.dialogs.history_dialog import HistoryDialog
 from task_level.presentation.dialogs.task_dialog import TaskDialog, format_attr_value
 from task_level.presentation.dialogs.task_type_manager_dialog import (
     TaskTypeManagerDialog,
@@ -124,6 +126,18 @@ class ProjectView(QWidget):
         btn_new.clicked.connect(self._new_task)
         btn_types = QPushButton("Tipos de tarefa...")
         btn_types.clicked.connect(self._manage_types)
+        self._btn_undo = QPushButton("← Desfazer")
+        self._btn_undo.clicked.connect(self._do_undo)
+        self._btn_redo = QPushButton("Refazer →")
+        self._btn_redo.clicked.connect(self._do_redo)
+        self._btn_history = QPushButton("Historico...")
+        self._btn_history.clicked.connect(self._open_history)
+        sc_undo = QShortcut(QKeySequence.StandardKey.Undo, self)
+        sc_undo.setContext(Qt.WindowShortcut)
+        sc_undo.activated.connect(self._do_undo)
+        sc_redo = QShortcut(QKeySequence.StandardKey.Redo, self)
+        sc_redo.setContext(Qt.WindowShortcut)
+        sc_redo.activated.connect(self._do_redo)
 
         top = QHBoxLayout()
         top.addWidget(btn_back)
@@ -136,6 +150,9 @@ class ProjectView(QWidget):
         top.addWidget(self._view_mode)
         top.addWidget(btn_new)
         top.addWidget(btn_types)
+        top.addWidget(self._btn_undo)
+        top.addWidget(self._btn_redo)
+        top.addWidget(self._btn_history)
         top.addStretch()
 
         self._all_list = QListWidget()
@@ -177,6 +194,7 @@ class ProjectView(QWidget):
         self._title.setText(f"#{project.id} {project.name}")
         self._load_focus()
         self._update_focus_button()
+        self._refresh_undo_buttons()
         self._reload_types()
 
     def _focus_settings_key(self) -> str:
@@ -255,6 +273,55 @@ class ProjectView(QWidget):
         self._update_filter_button()
         self._filter_changed()
 
+    def _undo_manager(self):
+        from task_level.services.undo import UndoManager
+
+        return UndoManager.for_db(self._db_path)
+
+    def _refresh_undo_buttons(self) -> None:
+        manager = self._undo_manager()
+        self._btn_undo.setEnabled(manager.can_undo())
+        self._btn_redo.setEnabled(manager.can_redo())
+        self._btn_undo.setToolTip(
+            f"Desfazer: {manager.undo_label()} (Ctrl+Z)"
+            if manager.can_undo()
+            else "Nada a desfazer (Ctrl+Z)"
+        )
+        self._btn_redo.setToolTip(
+            f"Refazer: {manager.redo_label()} (Ctrl+Y)"
+            if manager.can_redo()
+            else "Nada a refazer (Ctrl+Y)"
+        )
+
+    def _do_undo(self) -> None:
+        from task_level.services.undo import EmptyHistory
+
+        try:
+            self._undo_manager().undo(TaskService(self._db_path))
+        except EmptyHistory:
+            return
+        except DomainError as e:
+            QMessageBox.critical(self, "Desfazer", str(e))
+        self._filter_changed()
+        self._refresh_undo_buttons()
+
+    def _do_redo(self) -> None:
+        from task_level.services.undo import EmptyHistory
+
+        try:
+            self._undo_manager().redo(TaskService(self._db_path))
+        except EmptyHistory:
+            return
+        except DomainError as e:
+            QMessageBox.critical(self, "Refazer", str(e))
+        self._filter_changed()
+        self._refresh_undo_buttons()
+
+    def _open_history(self) -> None:
+        if self.project_id is None:
+            return
+        HistoryDialog.show(self, self._db_path, self.project_id)
+
     def _update_filter_button(self) -> None:
         self._btn_filters.setText(
             f"Filtros ({len(self._filters)})" if self._filters else "Filtros..."
@@ -286,6 +353,7 @@ class ProjectView(QWidget):
             self._stack.setCurrentWidget(self._all_stack)
         else:
             self._show_board(type_id)
+        self._refresh_undo_buttons()
 
     def _mode_changed(self) -> None:
         if self._type_filter.currentData() is None:
@@ -303,6 +371,7 @@ class ProjectView(QWidget):
         else:
             self._load_grouped_tree()
             self._all_stack.setCurrentWidget(self._grouped_tree)
+        self._refresh_undo_buttons()
 
     def _focus_data(self, uow, tasks):
         """Defs focadas por tipo + valores: ({tid: {name: def}}, {(task, def): val})."""
@@ -497,7 +566,7 @@ class ProjectView(QWidget):
         self._stack.setCurrentWidget(self._board_host)
 
     def _board_changed(self) -> None:
-        pass  # contadores ja atualizados no refresh do board
+        self._refresh_undo_buttons()
 
     # -- acoes ------------------------------------------------------------------------
 

@@ -64,6 +64,11 @@ task_attributes (
 task_phase_notes (id, task_id, phase_id, note, created_at, updated_at)
 ```
 
+### 8. Activity Log (historico + base do desfazer/refazer)
+```sql
+activity_log (id, project_id, task_id, task_title, action, summary, undo_json, created_at)
+```
+
 ---
 
 ## Regras de Negócio

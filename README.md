@@ -44,3 +44,6 @@ uv run ruff check src tests       # lint
 - Botao **Foco...** escolhe atributos para exibir inline (colunas extras no
   Por tipo e fase, detalhes no Recentes e no Kanban); salvo por projeto e
   combina com os filtros.
+- Botao **Historico...** mostra o log de mudancas das tasks; botoes
+  **Desfazer/Refazer** (ou **Ctrl+Z / Ctrl+Y**) desfazem e refazem
+  mudancas da sessao (criar/excluir/editar, atributos, fases, notas).
