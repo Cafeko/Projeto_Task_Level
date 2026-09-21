@@ -14,6 +14,8 @@ from task_level.domain import (
     Task,
     TaskAttribute,
     ValidationError,
+    parse_currency,
+    parse_date,
     utcnow,
 )
 
@@ -25,6 +27,10 @@ def _has_value(attr: TaskAttribute, attr_type: str) -> bool:
         return attr.value_number is not None
     if attr_type == AttributeType.BOOLEAN.value:
         return attr.value_boolean is not None
+    if attr_type == AttributeType.CURRENCY.value:
+        return attr.value_number is not None
+    if attr_type == AttributeType.DATE.value:
+        return attr.value_text is not None and attr.value_text != ""
     if attr_type == AttributeType.REFERENCE_TASK.value:
         return attr.value_reference_task_id is not None
     if attr_type == AttributeType.REFERENCE_ATTRIBUTE.value:
@@ -185,6 +191,20 @@ class TaskService:
             if not isinstance(value, bool):
                 raise ValidationError(f"valor booleano invalido: {value!r}")
             return TaskAttribute(task_id, definition_id, value_boolean=value)
+        if attr_type == AttributeType.CURRENCY.value:
+            try:
+                number = (
+                    float(value) if isinstance(value, (int, float)) else parse_currency(str(value))
+                )
+            except ValidationError as e:
+                raise ValidationError(f"valor em dinheiro invalido: {value!r}") from e
+            return TaskAttribute(task_id, definition_id, value_number=number)
+        if attr_type == AttributeType.DATE.value:
+            try:
+                iso = parse_date(str(value))
+            except ValidationError as e:
+                raise ValidationError(f"data invalida: {value!r}") from e
+            return TaskAttribute(task_id, definition_id, value_text=iso)
         if attr_type == AttributeType.REFERENCE_TASK.value:
             ref_id = int(value)
             origin = uow.tasks.get(task_id)

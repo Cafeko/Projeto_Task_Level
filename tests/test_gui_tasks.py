@@ -184,3 +184,36 @@ def test_task_dialog_fixed_ref_attribute_task_only(tmp_path, qapp):
         assert task_id == f1.id
     finally:
         dlg.close()
+
+
+def test_task_dialog_currency_and_date_payload(tmp_path, qapp):
+    from task_level.presentation.dialogs.task_dialog import TaskDialog
+
+    db = tmp_path / "money.db"
+    pid = ProjectService(db).create("P1").id
+    tid = TaskTypeService(db).create_type(
+        pid,
+        "Venda",
+        attributes=[
+            {"name": "preco", "label": "Preco", "type": "currency"},
+            {"name": "venc", "label": "Vencimento", "type": "date"},
+        ],
+    ).id
+    TaskService(db).create_task(pid, tid, "V1", values={"preco": 10})
+
+    dlg = TaskDialog(None, db, pid, task_type_id=tid)
+    try:
+        from PySide6.QtCore import QDate
+
+        preco_widget = dlg._fields["preco"]
+        preco_widget.setText("2.500,75")
+        dlg._title.setText("V2")
+        # sem valor previo: comeca no dia atual, ja editavel
+        today = QDate.currentDate().toString("yyyy-MM-dd")
+        assert dlg.payload()["values"]["venc"] == today
+        dlg._date_edits["venc"].setDate(QDate(2026, 9, 20))
+        payload = dlg.payload()
+        assert payload["values"]["preco"] == 2500.75
+        assert payload["values"]["venc"] == "2026-09-20"
+    finally:
+        dlg.close()

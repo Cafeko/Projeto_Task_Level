@@ -27,6 +27,8 @@ from task_level.domain import AttributeType
 TYPE_LABELS: list[tuple[str, str]] = [
     ("Texto", AttributeType.TEXT.value),
     ("Numero", AttributeType.NUMBER.value),
+    ("Dinheiro (R$)", AttributeType.CURRENCY.value),
+    ("Data", AttributeType.DATE.value),
     ("Verdadeiro/Falso", AttributeType.BOOLEAN.value),
     ("Referencia a task", AttributeType.REFERENCE_TASK.value),
     ("Referencia a atributo", AttributeType.REFERENCE_ATTRIBUTE.value),

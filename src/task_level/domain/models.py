@@ -44,6 +44,54 @@ def to_local(dt: datetime) -> datetime:
     return dt.astimezone()
 
 
+def parse_currency(text: str) -> float:
+    """Aceita 'R$ 1.234,56', '1234,56', '1234.56' -> float. Erro: ValidationError."""
+    cleaned = text.strip().replace("R$", "").replace("r$", "").strip()
+    if not cleaned:
+        raise ValidationError("valor em dinheiro vazio")
+    if "," in cleaned and "." in cleaned:
+        cleaned = cleaned.replace(".", "").replace(",", ".")
+    elif "," in cleaned:
+        cleaned = cleaned.replace(",", ".")
+    try:
+        return float(cleaned)
+    except ValueError as e:
+        raise ValidationError(f"valor em dinheiro invalido: {text!r}") from e
+
+
+def format_currency(value: float) -> str:
+    """1234.5 -> 'R$ 1.234,50' (pt-BR)."""
+    grouped = f"{value:,.2f}"  # '1,234.50'
+    return "R$ " + grouped.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def parse_date(text: str) -> str:
+    """Aceita '20/09/2026' ou '2026-09-20' -> ISO 'YYYY-MM-DD'."""
+    from datetime import date as _date
+
+    cleaned = text.strip()
+    if not cleaned:
+        raise ValidationError("data vazia")
+    try:
+        if "/" in cleaned:
+            day, month, year = (int(p) for p in cleaned.replace("-", "/").split("/"))
+            return _date(year, month, day).isoformat()
+        return _date.fromisoformat(cleaned).isoformat()
+    except ValueError as e:
+        raise ValidationError(f"data invalida: {text!r}") from e
+
+
+def format_date(iso_text: str) -> str:
+    """'2026-09-20' -> '20/09/2026' (se invalido, devolve como esta)."""
+    try:
+        year, month, day = (int(p) for p in iso_text.strip().split("-"))
+        from datetime import date as _date
+
+        return _date(year, month, day).strftime("%d/%m/%Y")
+    except (ValueError, AttributeError):
+        return iso_text
+
+
 def _require_non_empty(value: str, field_name: str) -> None:
     if not value or not value.strip():
         raise ValidationError(f"{field_name} nao pode ser vazio")
@@ -172,6 +220,8 @@ class TaskAttribute:
             AttributeType.TEXT.value: "value_text",
             AttributeType.NUMBER.value: "value_number",
             AttributeType.BOOLEAN.value: "value_boolean",
+            AttributeType.CURRENCY.value: "value_number",
+            AttributeType.DATE.value: "value_text",
             AttributeType.REFERENCE_TASK.value: "value_reference_task_id",
             AttributeType.REFERENCE_ATTRIBUTE.value: "value_reference_attribute_id",
         }[attr_type]

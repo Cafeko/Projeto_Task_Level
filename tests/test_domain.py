@@ -20,6 +20,8 @@ def test_attribute_type_values():
         "text",
         "number",
         "boolean",
+        "currency",
+        "date",
         "reference_task",
         "reference_attribute",
     }
@@ -81,3 +83,25 @@ def test_to_local_keeps_instant_uses_pc_zone():
     assert local.utcoffset() == datetime.now().astimezone().utcoffset()
     naive = datetime(2026, 1, 1, 12, 0, 0)  # sem tz: assume UTC
     assert to_local(naive) == naive.replace(tzinfo=timezone.utc).astimezone()
+
+
+def test_currency_parse_and_format():
+    from task_level.domain import format_currency, parse_currency
+
+    assert parse_currency("R$ 1.234,56") == 1234.56
+    assert parse_currency("1234,56") == 1234.56
+    assert parse_currency("1234.56") == 1234.56
+    assert format_currency(1234.56) == "R$ 1.234,56"
+    assert format_currency(10) == "R$ 10,00"
+
+
+def test_date_parse_and_format():
+    from task_level.domain import ValidationError, format_date, parse_date
+
+    assert parse_date("20/09/2026") == "2026-09-20"
+    assert parse_date("2026-09-20") == "2026-09-20"
+    assert format_date("2026-09-20") == "20/09/2026"
+    with pytest.raises(ValidationError):
+        parse_date("31/02/2026")
+    with pytest.raises(ValidationError):
+        parse_date(" batman ")

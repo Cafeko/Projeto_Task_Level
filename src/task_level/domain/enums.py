@@ -9,6 +9,8 @@ class AttributeType(str, Enum):
     TEXT = "text"
     NUMBER = "number"
     BOOLEAN = "boolean"
+    CURRENCY = "currency"
+    DATE = "date"
     REFERENCE_TASK = "reference_task"
     REFERENCE_ATTRIBUTE = "reference_attribute"
 

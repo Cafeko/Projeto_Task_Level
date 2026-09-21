@@ -34,8 +34,14 @@ from task_level.presentation.dialogs.reference_attribute_picker import (
 )
 
 
-def _format_attr_value(attr) -> str:
+def _format_attr_value(attr, attr_type: str | None = None) -> str:
     """Texto curto do valor de um TaskAttribute (p/ exibir em combos/resumos)."""
+    from task_level.domain import AttributeType, format_currency, format_date
+
+    if attr_type == AttributeType.CURRENCY.value and attr.value_number is not None:
+        return format_currency(attr.value_number)
+    if attr_type == AttributeType.DATE.value and attr.value_text:
+        return format_date(attr.value_text)
     if attr.value_text is not None:
         text = attr.value_text.strip()
         return text if len(text) <= 40 else text[:39] + "…"
@@ -66,6 +72,7 @@ class TaskDialog(QDialog):
         self._fields: dict[str, QWidget] = {}
         self._ref_attr_values: dict[str, tuple[int, int] | None] = {}
         self._ref_fixed: dict[str, tuple[QComboBox, str]] = {}
+        self._date_edits: dict[str, QWidget] = {}
 
         self.setWindowTitle("Editar task" if task_id else "Nova task")
         self.resize(480, 520)
@@ -215,6 +222,7 @@ class TaskDialog(QDialog):
                 item.widget().deleteLater()
         self._fields = {}
         self._ref_fixed = {}
+        self._date_edits = {}
 
     def _build_fields(self, prefill: bool) -> None:
         self._clear_attr_form()
@@ -236,6 +244,33 @@ class TaskDialog(QDialog):
                 if saved and saved.value_boolean is not None:
                     w.setChecked(saved.value_boolean)
                 widget = w
+            elif d.type == AttributeType.CURRENCY.value:
+                from task_level.domain import format_currency
+
+                w = QLineEdit()
+                w.setPlaceholderText("ex: 1.234,56")
+                if saved and saved.value_number is not None:
+                    w.setText(format_currency(saved.value_number))
+                widget = w
+            elif d.type == AttributeType.DATE.value:
+                from PySide6.QtCore import QDate
+                from PySide6.QtWidgets import QDateEdit
+
+                date_edit = QDateEdit()
+                date_edit.setCalendarPopup(True)
+                date_edit.setDisplayFormat("dd/MM/yyyy")
+                if saved and saved.value_text:
+                    try:
+                        from task_level.domain import parse_date
+
+                        iso = parse_date(saved.value_text)
+                        date_edit.setDate(QDate.fromString(iso, "yyyy-MM-dd"))
+                    except Exception:
+                        date_edit.setDate(QDate.currentDate())
+                else:
+                    date_edit.setDate(QDate.currentDate())
+                self._date_edits[d.name] = date_edit
+                widget = date_edit
             elif d.type == AttributeType.REFERENCE_TASK.value:
                 w = QComboBox()
                 w.addItem("(nenhuma)", None)
@@ -329,7 +364,8 @@ class TaskDialog(QDialog):
             }
             d = definitions.get(attr.attribute_definition_id)
             name = d.label if d else f"#{attr_id}"
-            return f"#{task_id} {task.title} - {name} = {_format_attr_value(attr)}"
+            dtype = d.type if d else None
+            return f"#{task_id} {task.title} - {name} = {_format_attr_value(attr, dtype)}"
 
     def _eligible_ref_tasks(self, definition) -> list[tuple[int, str]]:
         """Tasks do projeto que ja tem valor no atributo fixo (referenciaveis).
@@ -360,7 +396,7 @@ class TaskDialog(QDialog):
                 if value is None:
                     continue  # sem valor ainda: nada a referenciar
                 tname = type_names.get(t.task_type_id, "?")
-                shown = _format_attr_value(value)
+                shown = _format_attr_value(value, target_def.type)
                 eligible.append(
                     (t.id, f"[{tname}] #{t.id} {t.title} — {target_def.label} = {shown}")
                 )
@@ -383,6 +419,19 @@ class TaskDialog(QDialog):
                     values[name] = float(text.replace(",", "."))
             elif d.type == AttributeType.BOOLEAN.value:
                 values[name] = widget.isChecked()
+            elif d.type == AttributeType.CURRENCY.value:
+                from task_level.domain import ValidationError, parse_currency
+
+                text = widget.text().strip()
+                if text:
+                    try:
+                        values[name] = parse_currency(text)
+                    except ValidationError:
+                        pass  # service acusa ao salvar; obrigatorio acusa aqui
+            elif d.type == AttributeType.DATE.value:
+                date_edit = self._date_edits.get(name)
+                if date_edit is not None:
+                    values[name] = date_edit.date().toString("yyyy-MM-dd")
             elif d.type == AttributeType.REFERENCE_TASK.value:
                 if widget.currentData() is not None:
                     values[name] = widget.currentData()

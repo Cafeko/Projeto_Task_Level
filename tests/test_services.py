@@ -352,3 +352,31 @@ def test_final_phase_kept_single_on_edit_and_delete(services):
         task_types.update_phase(first.id, is_final=False)
     with pytest.raises(ValidationError):
         task_types.delete_phase(first.id)
+
+
+def test_currency_and_date_attributes(services):
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    t = task_types.create_type(
+        p.id,
+        "T",
+        attributes=[
+            {"name": "preco", "label": "Preco", "type": "currency"},
+            {"name": "venc", "label": "Vencimento", "type": "date"},
+        ],
+    )
+    task = tasks.create_task(p.id, t.id, "T1", values={"preco": "1.234,56"})
+    tasks.set_attribute(task.id, "venc", "20/09/2026")
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(task_types._db_path) as uow:
+        preco_def = uow.attribute_definitions.get_by_name(t.id, "preco")
+        venc_def = uow.attribute_definitions.get_by_name(t.id, "venc")
+        preco = uow.task_attributes.get(task.id, preco_def.id)
+        venc = uow.task_attributes.get(task.id, venc_def.id)
+    assert preco is not None and preco.value_number == 1234.56
+    assert venc is not None and venc.value_text == "2026-09-20"
+    with pytest.raises(ValidationError):
+        tasks.set_attribute(task.id, "preco", "muito dinheiro")
+    with pytest.raises(ValidationError):
+        tasks.set_attribute(task.id, "venc", "ontem")

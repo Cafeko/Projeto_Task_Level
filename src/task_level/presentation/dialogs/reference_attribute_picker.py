@@ -76,11 +76,17 @@ class ReferenceAttributePicker(QDialog):
             d = definitions.get(v.attribute_definition_id)
             if d is None or v.id is None:
                 continue
-            label = f"{d.label} = {self._display(v)}"
+            label = f"{d.label} = {self._display(v, d.type)}"
             self._attr_combo.addItem(label, (task_id, v.id))
 
     @staticmethod
-    def _display(attr) -> str:
+    def _display(attr, attr_type: str | None = None) -> str:
+        from task_level.domain import AttributeType, format_currency, format_date
+
+        if attr_type == AttributeType.CURRENCY.value and attr.value_number is not None:
+            return format_currency(attr.value_number)
+        if attr_type == AttributeType.DATE.value and attr.value_text:
+            return format_date(attr.value_text)
         if attr.value_text is not None:
             return attr.value_text
         if attr.value_number is not None:
