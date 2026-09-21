@@ -83,3 +83,55 @@ def test_kanban_board_columns_and_move(setup, qapp):
         assert sum(counts) == 1 and counts[-1] == 1
     finally:
         board.close()
+
+
+def test_task_dialog_fixed_ref_attribute_task_only(tmp_path, qapp):
+    """Ref-attr com atributo fixo: combo so de tasks (entre tipos) e resolve par."""
+    from task_level.presentation.dialogs.task_dialog import TaskDialog
+
+    db = tmp_path / "fixed.db"
+    pid = ProjectService(db).create("P1").id
+    types = TaskTypeService(db)
+    feat = types.create_type(
+        pid,
+        "Feature",
+        attributes=[{"name": "valor", "label": "Valor", "type": "number"}],
+    )
+    bug = types.create_type(
+        pid,
+        "Bug",
+        attributes=[
+            {
+                "name": "espelho",
+                "label": "Espelho",
+                "type": "reference_attribute",
+                "reference_config": {"attribute_name": "valor"},
+            },
+            {"name": "rel", "label": "Rel", "type": "reference_task"},
+        ],
+    )
+    svc = TaskService(db)
+    f1 = svc.create_task(pid, feat.id, "F1", values={"valor": 10})
+    svc.create_task(pid, feat.id, "F2")  # sem valor: nao entra na lista
+
+    dlg = TaskDialog(None, db, pid, task_type_id=bug.id)
+    try:
+        idx = dlg._type_combo.findData(bug.id)
+        dlg._type_combo.setCurrentIndex(idx)
+        dlg._rebuild_attributes()
+        combo, attr_name = dlg._ref_fixed["espelho"]
+        assert attr_name == "valor"
+        assert combo.count() == 2  # (nenhuma) + F1
+        assert combo.itemData(1) == f1.id
+        assert "Valor = 10" in combo.itemText(1)  # valor visivel na opcao
+        # ref-task cruza tipos e mostra o tipo no texto
+        rel_combo = dlg._fields["rel"]
+        assert rel_combo.count() == 3  # (nenhuma) + F1 + F2
+        assert "Feature" in rel_combo.itemText(1)
+        dlg._title.setText("B1")
+        combo.setCurrentIndex(1)
+        payload = dlg.payload()
+        task_id, _attr_value_id = payload["values"]["espelho"]
+        assert task_id == f1.id
+    finally:
+        dlg.close()

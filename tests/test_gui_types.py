@@ -117,3 +117,51 @@ def test_manager_dialog_lists_types(tmp_path, qapp):
         assert dlg._list.count() == 1
     finally:
         dlg.close()
+
+
+def test_attribute_dialog_reference_config(qapp):
+    from task_level.presentation.dialogs.attribute_dialog import AttributeDialog
+
+    targets = [
+        {
+            "type_id": 1,
+            "type_name": "Feature",
+            "attrs": [{"name": "valor", "label": "Valor"}],
+        }
+    ]
+    dlg = AttributeDialog(
+        None,
+        {"name": "espelho", "label": "Espelho", "type": "reference_attribute"},
+        ref_targets=targets,
+    )
+    try:
+        assert dlg._ref_section.isVisibleTo(dlg)
+        assert dlg.data()["reference_config"] == {"attribute_name": "valor"}
+    finally:
+        dlg.close()
+
+
+def test_attribute_dialog_reference_task_config(qapp):
+    from task_level.presentation.dialogs.attribute_dialog import AttributeDialog
+
+    targets = [
+        {
+            "type_id": 7,
+            "type_name": "Feature",
+            "attrs": [{"name": "valor", "label": "Valor"}],
+        }
+    ]
+    dlg = AttributeDialog(
+        None,
+        {
+            "name": "rel",
+            "label": "Rel",
+            "type": "reference_task",
+            "reference_config": {"target_type_id": 7},
+        },
+        ref_targets=targets,
+    )
+    try:
+        assert dlg.data()["reference_config"] == {"target_type_id": 7}
+    finally:
+        dlg.close()

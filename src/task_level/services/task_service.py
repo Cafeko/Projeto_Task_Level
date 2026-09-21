@@ -90,6 +90,28 @@ class TaskService:
                 raise NotFoundError(f"task {task_id} nao encontrada")
             uow.tasks.delete(task_id)
 
+    def resolve_reference_attribute(
+        self, task_id: int, attribute_name: str
+    ) -> tuple[int, int] | None:
+        """Resolve (task_id, attribute_id-valor) para o atributo `attribute_name`.
+
+        Retorna None se a task nao tem definicao com esse nome ou se ainda
+        nao ha valor preenchido. Usado pelo modo "atributo fixo" do form.
+        """
+        with UnitOfWork.open(self._db_path) as uow:
+            task = uow.tasks.get(task_id)
+            if task is None:
+                return None
+            definition = uow.attribute_definitions.get_by_name(
+                task.task_type_id, attribute_name
+            )
+            if definition is None or definition.id is None:
+                return None
+            value = uow.task_attributes.get(task_id, definition.id)
+            if value is None or value.id is None:
+                return None
+            return (task_id, value.id)
+
     def update_details(self, task_id: int, title: str, description: str = "") -> Task:
         """Atualiza titulo/descricao (usado pelo dialog de edicao - Parte 9)."""
         with UnitOfWork.open(self._db_path) as uow:
@@ -164,8 +186,13 @@ class TaskService:
             return TaskAttribute(task_id, definition_id, value_boolean=value)
         if attr_type == AttributeType.REFERENCE_TASK.value:
             ref_id = int(value)
-            if uow.tasks.get(ref_id) is None:
+            origin = uow.tasks.get(task_id)
+            target = uow.tasks.get(ref_id)
+            if target is None:
                 raise NotFoundError(f"task referenciada {ref_id} nao encontrada")
+            if origin is not None and target.project_id != origin.project_id:
+                raise ValidationError("referencia deve ser para task do mesmo projeto")
+            self._check_ref_task_config(uow, definition_id, target)
             self._reject_cycle(uow, task_id, ref_id)
             return TaskAttribute(
                 task_id, definition_id, value_reference_task_id=ref_id
@@ -177,6 +204,13 @@ class TaskService:
                 raise NotFoundError(f"atributo referenciado {ref_attr_id} nao existe")
             if target.task_id != ref_task_id:
                 raise ValidationError("atributo referenciado nao pertence a task indicada")
+            origin = uow.tasks.get(task_id)
+            target_task = uow.tasks.get(ref_task_id)
+            if target_task is None:
+                raise NotFoundError(f"task referenciada {ref_task_id} nao encontrada")
+            if origin is not None and target_task.project_id != origin.project_id:
+                raise ValidationError("referencia deve ser para task do mesmo projeto")
+            self._check_ref_attr_config(uow, definition_id, target_task, target)
             self._reject_cycle(uow, task_id, ref_task_id)
             return TaskAttribute(
                 task_id,
@@ -196,6 +230,39 @@ class TaskService:
             "referencia de atributo: esperado (task_id, attribute_id) ou "
             "{task_id, attribute_id}"
         )
+
+    @staticmethod
+    def _field_config(uow: UnitOfWork, definition_id: int) -> dict:
+        definition = uow.attribute_definitions.get(definition_id)
+        if definition is None or not isinstance(definition.reference_config, dict):
+            return {}
+        return definition.reference_config
+
+    @staticmethod
+    def _check_ref_task_config(uow: UnitOfWork, definition_id: int, target) -> None:
+        """reference_task aceita qualquer tipo do projeto, salvo filtro configurado."""
+        allowed = TaskService._field_config(uow, definition_id).get("target_type_id")
+        if allowed is not None and target.task_type_id != allowed:
+            raise ValidationError("referencia fora do tipo permitido neste atributo")
+
+    @staticmethod
+    def _check_ref_attr_config(
+        uow: UnitOfWork, definition_id: int, target_task, target_value
+    ) -> None:
+        """reference_attribute com atributo fixo: o alvo tem que ser aquele atributo."""
+        config = TaskService._field_config(uow, definition_id)
+        wanted = config.get("attribute_name")
+        if wanted:
+            target_def = uow.attribute_definitions.get(
+                target_value.attribute_definition_id
+            )
+            if target_def is None or target_def.name != wanted:
+                raise ValidationError(
+                    f"este atributo so referencia '{wanted}' (alvo e outro atributo)"
+                )
+        allowed = config.get("target_type_id")
+        if allowed is not None and target_task.task_type_id != allowed:
+            raise ValidationError("referencia fora do tipo permitido neste atributo")
 
     # -- ciclos ---------------------------------------------------------------
 

@@ -43,11 +43,17 @@ def validate_type_payload(payload: dict) -> list[str]:
 
 
 class TaskTypeDialog(QDialog):
-    def __init__(self, parent: QWidget | None = None, payload: dict | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        payload: dict | None = None,
+        ref_targets: list[dict] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Tipo de tarefa")
         self.resize(560, 480)
         payload = payload or {}
+        self._ref_targets: list[dict] = [dict(t) for t in (ref_targets or [])]
 
         self._name = QLineEdit(payload.get("name", ""))
         self._desc = QLineEdit(payload.get("description", ""))
@@ -231,7 +237,7 @@ class TaskTypeDialog(QDialog):
             )
 
     def _add_attr(self) -> None:
-        spec = AttributeDialog.create(self)
+        spec = AttributeDialog.create(self, ref_targets=self._ref_targets)
         if spec is not None:
             self._attrs.append(spec)
             self._refresh_attrs()
@@ -240,10 +246,9 @@ class TaskTypeDialog(QDialog):
         row = self._attr_table.currentRow()
         if row < 0:
             return
-        spec = AttributeDialog.edit(self, self._attrs[row])
+        spec = AttributeDialog.edit(self, self._attrs[row], ref_targets=self._ref_targets)
         if spec is not None:
             spec["id"] = self._attrs[row].get("id")
-            spec["reference_config"] = self._attrs[row].get("reference_config")
             self._attrs[row] = spec
             self._refresh_attrs()
 
@@ -274,11 +279,18 @@ class TaskTypeDialog(QDialog):
         super().accept()
 
     @classmethod
-    def create(cls, parent: QWidget | None = None) -> dict | None:
-        dlg = cls(parent)
+    def create(
+        cls, parent: QWidget | None = None, ref_targets: list[dict] | None = None
+    ) -> dict | None:
+        dlg = cls(parent, ref_targets=ref_targets)
         return dlg.payload() if dlg.exec() else None
 
     @classmethod
-    def edit(cls, parent: QWidget | None, payload: dict) -> dict | None:
-        dlg = cls(parent, payload)
+    def edit(
+        cls,
+        parent: QWidget | None,
+        payload: dict,
+        ref_targets: list[dict] | None = None,
+    ) -> dict | None:
+        dlg = cls(parent, payload, ref_targets=ref_targets)
         return dlg.payload() if dlg.exec() else None

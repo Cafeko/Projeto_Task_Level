@@ -74,8 +74,25 @@ class TaskTypeManagerDialog(QDialog):
         item = self._list.currentItem()
         return item.data(Qt.UserRole) if item else None
 
+    def _ref_targets(self) -> list[dict]:
+        """Tipos + atributos do projeto (para configurar referencias)."""
+        with UnitOfWork.open(self._db_path) as uow:
+            targets = []
+            for t in uow.task_types.list_by_project(self._project_id):
+                defs = uow.attribute_definitions.list_by_task_type(t.id)
+                targets.append(
+                    {
+                        "type_id": t.id,
+                        "type_name": t.name,
+                        "attrs": [
+                            {"name": d.name, "label": d.label} for d in defs
+                        ],
+                    }
+                )
+        return targets
+
     def _create(self) -> None:
-        payload = TaskTypeDialog.create(self)
+        payload = TaskTypeDialog.create(self, ref_targets=self._ref_targets())
         if payload is None:
             return
         try:
@@ -135,7 +152,9 @@ class TaskTypeManagerDialog(QDialog):
         if type_id is None:
             return
         try:
-            payload = TaskTypeDialog.edit(self, self._load_payload(type_id))
+            payload = TaskTypeDialog.edit(
+                self, self._load_payload(type_id), ref_targets=self._ref_targets()
+            )
         except DomainError as e:
             QMessageBox.critical(self, "Erro", str(e))
             return

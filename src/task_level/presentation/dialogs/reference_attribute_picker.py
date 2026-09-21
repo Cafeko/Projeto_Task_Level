@@ -48,11 +48,15 @@ class ReferenceAttributePicker(QDialog):
 
     def _load_tasks(self) -> None:
         with UnitOfWork.open(self._db_path) as uow:
+            type_names = {
+                t.id: t.name for t in uow.task_types.list_by_project(self._project_id)
+            }
             tasks = uow.tasks.list_by_project(self._project_id)
         for t in tasks:
             if t.id == self._exclude:
                 continue
-            self._task_combo.addItem(f"#{t.id} {t.title}", t.id)
+            tname = type_names.get(t.task_type_id, "?")
+            self._task_combo.addItem(f"[{tname}] #{t.id} {t.title}", t.id)
 
     def _load_attributes(self) -> None:
         self._attr_combo.clear()

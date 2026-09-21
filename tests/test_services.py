@@ -83,6 +83,162 @@ def test_reference_attribute_points_to_other_task_attr(services):
         tasks.set_attribute(b.id, "espelho", (a.id, 999999))
 
 
+def test_reference_task_cross_type_same_project(services):
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    bug = task_types.create_type(
+        p.id,
+        "Bug",
+        attributes=[{"name": "rel", "label": "Rel", "type": "reference_task"}],
+    )
+    feat = task_types.create_type(
+        p.id,
+        "Feature",
+        attributes=[{"name": "nota", "label": "Nota", "type": "text"}],
+    )
+    f = tasks.create_task(p.id, feat.id, "F1")
+    b = tasks.create_task(p.id, bug.id, "B1")
+    tasks.set_attribute(b.id, "rel", f.id)  # tipos diferentes, mesmo projeto: ok
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(task_types._db_path) as uow:
+        rel_def = uow.attribute_definitions.get_by_name(bug.id, "rel")
+        got = uow.task_attributes.get(b.id, rel_def.id)
+    assert got is not None and got.value_reference_task_id == f.id
+
+
+def test_reference_other_project_rejected(services):
+    projects, task_types, tasks = services
+    p1 = projects.create("P1")
+    p2 = projects.create("P2")
+    t1 = task_types.create_type(
+        p1.id,
+        "T",
+        attributes=[{"name": "rel", "label": "R", "type": "reference_task"}],
+    )
+    t2 = task_types.create_type(
+        p2.id, "T", attributes=[{"name": "x", "label": "X", "type": "text"}]
+    )
+    other = tasks.create_task(p2.id, t2.id, "Outro")
+    mine = tasks.create_task(p1.id, t1.id, "Minha")
+    with pytest.raises(ValidationError):
+        tasks.set_attribute(mine.id, "rel", other.id)
+
+
+def test_reference_attribute_fixed_config_cross_type(services):
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    a = task_types.create_type(
+        p.id,
+        "A",
+        attributes=[{"name": "valor", "label": "Valor", "type": "number"}],
+    )
+    c = task_types.create_type(
+        p.id,
+        "C",
+        attributes=[{"name": "valor", "label": "Valor", "type": "number"}],
+    )
+    b = task_types.create_type(
+        p.id,
+        "B",
+        attributes=[
+            {"name": "outro", "label": "Outro", "type": "text"},
+            {
+                "name": "espelho",
+                "label": "Espelho",
+                "type": "reference_attribute",
+                "reference_config": {"attribute_name": "valor"},
+            },
+        ],
+    )
+    from task_level.data import UnitOfWork
+
+    ta = tasks.create_task(p.id, a.id, "TA", values={"valor": 7})
+    tc = tasks.create_task(p.id, c.id, "TC", values={"valor": 9})
+    tb = tasks.create_task(p.id, b.id, "TB", values={"outro": "x"})
+    with UnitOfWork.open(task_types._db_path) as uow:
+        outro_def = uow.attribute_definitions.get_by_name(b.id, "outro")
+        outro_val = uow.task_attributes.get(tb.id, outro_def.id)
+    # entre tipos com o atributo fixo: ok
+    resolved = tasks.resolve_reference_attribute(ta.id, "valor")
+    assert resolved is not None and resolved[0] == ta.id
+    tasks.set_attribute(tb.id, "espelho", resolved)
+    # atributo diferente do fixo: rejeita
+    with pytest.raises(ValidationError):
+        tasks.set_attribute(tb.id, "espelho", (tb.id, outro_val.id))
+    # sem valor no atributo fixo: nao resolve
+    assert tasks.resolve_reference_attribute(tb.id, "valor") is None
+    _ = tc
+
+
+def test_reference_config_target_type_filter(services):
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    a = task_types.create_type(
+        p.id,
+        "A",
+        attributes=[{"name": "valor", "label": "Valor", "type": "number"}],
+    )
+    c = task_types.create_type(
+        p.id,
+        "C",
+        attributes=[{"name": "valor", "label": "Valor", "type": "number"}],
+    )
+    b = task_types.create_type(
+        p.id,
+        "B",
+        attributes=[
+            {
+                "name": "espelho",
+                "label": "Espelho",
+                "type": "reference_attribute",
+                "reference_config": {"attribute_name": "valor"},
+            },
+        ],
+    )
+    from task_level.data import UnitOfWork
+
+    # ajusta o filtro para o tipo A (id real so existe apos criar)
+    with UnitOfWork.open(task_types._db_path) as uow:
+        esp_def = uow.attribute_definitions.get_by_name(b.id, "espelho")
+    task_types.update_attribute(
+        esp_def.id,
+        {
+            "name": "espelho",
+            "label": "Espelho",
+            "type": "reference_attribute",
+            "reference_config": {"attribute_name": "valor", "target_type_id": a.id},
+            "order": 0,
+        },
+    )
+    ta = tasks.create_task(p.id, a.id, "TA", values={"valor": 1})
+    tc = tasks.create_task(p.id, c.id, "TC", values={"valor": 2})
+    tb = tasks.create_task(p.id, b.id, "TB")
+    tasks.set_attribute(tb.id, "espelho", tasks.resolve_reference_attribute(ta.id, "valor"))
+    with pytest.raises(ValidationError):
+        tasks.set_attribute(tb.id, "espelho", tasks.resolve_reference_attribute(tc.id, "valor"))
+
+
+def test_reference_config_target_type_must_be_same_project(services):
+    projects, task_types, _tasks = services
+    p1 = projects.create("P1")
+    p2 = projects.create("P2")
+    other = task_types.create_type(p2.id, "Outro")
+    with pytest.raises(ValidationError):
+        task_types.create_type(
+            p1.id,
+            "X",
+            attributes=[
+                {
+                    "name": "r",
+                    "label": "R",
+                    "type": "reference_task",
+                    "reference_config": {"target_type_id": other.id},
+                }
+            ],
+        )
+
+
 def test_wrong_type_value_rejected(services):
     projects, task_types, tasks = services
     p = projects.create("P1")

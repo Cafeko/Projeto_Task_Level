@@ -29,6 +29,9 @@ uv run ruff check src tests       # lint
 - Todas as tasks do mesmo tipo tem os mesmos atributos.
 - Atributos obrigatorios bloqueiam a ida para a fase final.
 - Referencias entre tasks nao podem formar ciclos.
+- Referencias (`task` e `atributo`) valem entre tipos diferentes, desde que
+  no mesmo projeto. Um atributo `reference_attribute` pode fixar o atributo
+  alvo na edicao do tipo — ai na task basta escolher a task.
 - Visao **Todos** do projeto tem 2 modos: **Por tipo e fase**
   (separadas por tipo, ordenadas pela ordem da fase) e **Recentes**
   (tudo misturado, criadas/modificadas no topo).

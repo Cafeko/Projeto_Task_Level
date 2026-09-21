@@ -34,6 +34,21 @@ from task_level.presentation.dialogs.reference_attribute_picker import (
 )
 
 
+def _format_attr_value(attr) -> str:
+    """Texto curto do valor de um TaskAttribute (p/ exibir em combos/resumos)."""
+    if attr.value_text is not None:
+        text = attr.value_text.strip()
+        return text if len(text) <= 40 else text[:39] + "…"
+    if attr.value_number is not None:
+        number = attr.value_number
+        return str(int(number)) if float(number).is_integer() else str(number)
+    if attr.value_boolean is not None:
+        return "sim" if attr.value_boolean else "nao"
+    if attr.value_reference_task_id is not None:
+        return f"task #{attr.value_reference_task_id}"
+    return "-"
+
+
 class TaskDialog(QDialog):
     def __init__(
         self,
@@ -50,6 +65,7 @@ class TaskDialog(QDialog):
         self._definitions: list = []
         self._fields: dict[str, QWidget] = {}
         self._ref_attr_values: dict[str, tuple[int, int] | None] = {}
+        self._ref_fixed: dict[str, tuple[QComboBox, str]] = {}
 
         self.setWindowTitle("Editar task" if task_id else "Nova task")
         self.resize(480, 520)
@@ -150,6 +166,7 @@ class TaskDialog(QDialog):
             if item.widget():
                 item.widget().deleteLater()
         self._fields = {}
+        self._ref_fixed = {}
 
     def _build_fields(self, prefill: bool) -> None:
         self._clear_attr_form()
@@ -174,17 +191,41 @@ class TaskDialog(QDialog):
             elif d.type == AttributeType.REFERENCE_TASK.value:
                 w = QComboBox()
                 w.addItem("(nenhuma)", None)
+                allowed_type = (d.reference_config or {}).get("target_type_id")
                 with UnitOfWork.open(self._db_path) as uow:
+                    type_names = {
+                        t.id: t.name
+                        for t in uow.task_types.list_by_project(self._project_id)
+                    }
                     for t in uow.tasks.list_by_project(self._project_id):
                         if t.id == self._task_id:
                             continue
-                        w.addItem(f"#{t.id} {t.title}", t.id)
+                        if allowed_type is not None and t.task_type_id != allowed_type:
+                            continue
+                        tname = type_names.get(t.task_type_id, "?")
+                        w.addItem(f"[{tname}] #{t.id} {t.title}", t.id)
                 if saved and saved.value_reference_task_id is not None:
                     idx = w.findData(saved.value_reference_task_id)
                     if idx >= 0:
                         w.setCurrentIndex(idx)
                 widget = w
             elif d.type == AttributeType.REFERENCE_ATTRIBUTE.value:
+                fixed_attr = (d.reference_config or {}).get("attribute_name")
+                if fixed_attr:
+                    w = QComboBox()
+                    w.addItem("(nenhuma)", None)
+                    for task_id, label in self._eligible_ref_tasks(d):
+                        w.addItem(label, task_id)
+                    if saved and saved.value_reference_task_id is not None:
+                        idx = w.findData(saved.value_reference_task_id)
+                        if idx >= 0:
+                            w.setCurrentIndex(idx)
+                    self._ref_fixed[d.name] = (w, fixed_attr)
+                    widget = w
+                    suffix = " *" if d.required else ""
+                    self._attr_form.addRow(f"{d.label} → {fixed_attr}{suffix}:", widget)
+                    self._fields[d.name] = widget
+                    continue
                 label = QLabel("(nenhuma)")
                 key = d.name
                 if saved and saved.value_reference_attribute_id is not None:
@@ -240,7 +281,42 @@ class TaskDialog(QDialog):
             }
             d = definitions.get(attr.attribute_definition_id)
             name = d.label if d else f"#{attr_id}"
-            return f"#{task_id} {task.title} - {name}"
+            return f"#{task_id} {task.title} - {name} = {_format_attr_value(attr)}"
+
+    def _eligible_ref_tasks(self, definition) -> list[tuple[int, str]]:
+        """Tasks do projeto que ja tem valor no atributo fixo (referenciaveis).
+
+        Vale para tipos diferentes: filtra pelo nome do atributo e,
+        se configurado, pelo tipo alvo.
+        """
+        config = definition.reference_config or {}
+        attr_name = config.get("attribute_name")
+        allowed_type = config.get("target_type_id")
+        eligible: list[tuple[int, str]] = []
+        with UnitOfWork.open(self._db_path) as uow:
+            type_names = {
+                t.id: t.name
+                for t in uow.task_types.list_by_project(self._project_id)
+            }
+            for t in uow.tasks.list_by_project(self._project_id):
+                if t.id == self._task_id:
+                    continue
+                if allowed_type is not None and t.task_type_id != allowed_type:
+                    continue
+                target_def = uow.attribute_definitions.get_by_name(
+                    t.task_type_id, attr_name
+                )
+                if target_def is None or target_def.id is None:
+                    continue
+                value = uow.task_attributes.get(t.id, target_def.id)
+                if value is None:
+                    continue  # sem valor ainda: nada a referenciar
+                tname = type_names.get(t.task_type_id, "?")
+                shown = _format_attr_value(value)
+                eligible.append(
+                    (t.id, f"[{tname}] #{t.id} {t.title} — {target_def.label} = {shown}")
+                )
+        return eligible
 
     # -- payload ------------------------------------------------------------------
 
@@ -263,7 +339,18 @@ class TaskDialog(QDialog):
                 if widget.currentData() is not None:
                     values[name] = widget.currentData()
             elif d.type == AttributeType.REFERENCE_ATTRIBUTE.value:
-                if self._ref_attr_values.get(name) is not None:
+                if name in self._ref_fixed:
+                    combo, attr_name = self._ref_fixed[name]
+                    task_id = combo.currentData()
+                    if task_id is not None:
+                        from task_level.services import TaskService
+
+                        resolved = TaskService(self._db_path).resolve_reference_attribute(
+                            task_id, attr_name
+                        )
+                        if resolved is not None:
+                            values[name] = resolved
+                elif self._ref_attr_values.get(name) is not None:
                     values[name] = self._ref_attr_values[name]
         return {
             "title": self._title.text().strip(),

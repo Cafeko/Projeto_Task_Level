@@ -50,6 +50,7 @@ class TaskTypeService:
             assert task_type.id is not None
             self._create_phases(uow, task_type.id, phases)
             for i, spec in enumerate(attributes or []):
+                self._validate_reference_config(uow, project_id, spec)
                 uow.attribute_definitions.add(
                     AttributeDefinition(
                         task_type_id=task_type.id,
@@ -165,8 +166,10 @@ class TaskTypeService:
 
     def add_attribute(self, task_type_id: int, spec: dict) -> AttributeDefinition:
         with UnitOfWork.open(self._db_path) as uow:
-            if uow.task_types.get(task_type_id) is None:
+            task_type = uow.task_types.get(task_type_id)
+            if task_type is None:
                 raise NotFoundError(f"task_type {task_type_id} nao encontrado")
+            self._validate_reference_config(uow, task_type.project_id, spec)
             try:
                 return uow.attribute_definitions.add(
                     self._spec_to_definition(task_type_id, spec)
@@ -179,6 +182,9 @@ class TaskTypeService:
             current = uow.attribute_definitions.get(definition_id)
             if current is None:
                 raise NotFoundError(f"attribute {definition_id} nao encontrado")
+            task_type = uow.task_types.get(current.task_type_id)
+            project_id = task_type.project_id if task_type else None
+            self._validate_reference_config(uow, project_id, spec)
             updated = self._spec_to_definition(current.task_type_id, spec)
             updated.id = definition_id
             updated.created_at = current.created_at
@@ -193,6 +199,23 @@ class TaskTypeService:
             if uow.attribute_definitions.get(definition_id) is None:
                 raise NotFoundError(f"attribute {definition_id} nao encontrado")
             uow.attribute_definitions.delete(definition_id)
+
+    @staticmethod
+    def _validate_reference_config(uow, project_id: int | None, spec: dict) -> None:
+        """Garante que o tipo alvo da referencia pertence ao mesmo projeto."""
+        config = spec.get("reference_config")
+        if not config:
+            return
+        if not isinstance(config, dict):
+            raise ValidationError("reference_config deve ser um objeto")
+        target_type_id = config.get("target_type_id")
+        if target_type_id is None:
+            return
+        target = uow.task_types.get(int(target_type_id))
+        if target is None:
+            raise ValidationError("tipo alvo da referencia nao encontrado")
+        if project_id is not None and target.project_id != project_id:
+            raise ValidationError("tipo alvo da referencia e de outro projeto")
 
     @staticmethod
     def _spec_to_definition(task_type_id: int, spec: dict) -> AttributeDefinition:
