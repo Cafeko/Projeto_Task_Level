@@ -77,6 +77,9 @@ class TaskTypeService:
         initials = [s for s in specs if s.get("is_initial")]
         if len(initials) != 1:
             raise ValidationError("task_type precisa de exatamente 1 fase inicial")
+        finals = [s for s in specs if s.get("is_final")]
+        if len(finals) != 1:
+            raise ValidationError("task_type precisa de exatamente 1 fase final")
         for i, spec in enumerate(specs):
             uow.phases.add(
                 Phase(
@@ -127,6 +130,8 @@ class TaskTypeService:
             phase = Phase(task_type_id=task_type_id, name=name, **kwargs)
             if phase.is_initial:
                 uow.phases.unset_initials(task_type_id)
+            if phase.is_final:
+                uow.phases.unset_finals(task_type_id)
             return uow.phases.add(phase)
 
     def update_phase(self, phase_id: int, **fields) -> Phase:
@@ -146,6 +151,16 @@ class TaskTypeService:
                 ]
                 if not others:
                     raise ValidationError("tipo precisa manter 1 fase inicial")
+            if phase.is_final:
+                uow.phases.unset_finals(phase.task_type_id, except_id=phase_id)
+            else:
+                others = [
+                    p
+                    for p in uow.phases.list_by_task_type(phase.task_type_id)
+                    if p.id != phase_id and p.is_final
+                ]
+                if not others:
+                    raise ValidationError("tipo precisa manter 1 fase final")
             uow.phases.update(phase)
             return phase
 
@@ -162,6 +177,14 @@ class TaskTypeService:
                 ]
                 if not any(p.is_initial for p in others):
                     raise ValidationError("nao e possivel excluir a unica fase inicial")
+            if phase.is_final:
+                others = [
+                    p
+                    for p in uow.phases.list_by_task_type(phase.task_type_id)
+                    if p.id != phase_id
+                ]
+                if not any(p.is_final for p in others):
+                    raise ValidationError("nao e possivel excluir a unica fase final")
             uow.phases.delete(phase_id)
 
     def add_attribute(self, task_type_id: int, spec: dict) -> AttributeDefinition:

@@ -95,5 +95,14 @@ class PhaseRepository:
             else (task_type_id, except_id),
         )
 
+    def unset_finals(self, task_type_id: int, except_id: int | None = None) -> None:
+        self._conn.execute(
+            "UPDATE phases SET is_final = 0 WHERE task_type_id = ?"
+            + ("" if except_id is None else " AND id != ?"),
+            (task_type_id,)
+            if except_id is None
+            else (task_type_id, except_id),
+        )
+
     def delete(self, phase_id: int) -> None:
         self._conn.execute("DELETE FROM phases WHERE id = ?", (phase_id,))

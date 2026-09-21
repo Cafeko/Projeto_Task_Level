@@ -307,3 +307,48 @@ def test_type_requires_single_initial_phase(services):
         task_types.create_type(
             p.id, "Ruim", phases=[{"name": "A"}, {"name": "B"}]
         )
+
+
+def test_type_requires_single_final_phase(services):
+    projects, task_types, _tasks = services
+    p = projects.create("P1")
+    with pytest.raises(ValidationError):  # duas finais
+        task_types.create_type(
+            p.id,
+            "Ruim",
+            phases=[
+                {"name": "A", "is_initial": True, "is_final": True},
+                {"name": "B", "is_final": True},
+            ],
+        )
+    with pytest.raises(ValidationError):  # nenhuma final
+        task_types.create_type(
+            p.id,
+            "Ruim",
+            phases=[
+                {"name": "A", "is_initial": True},
+                {"name": "B"},
+            ],
+        )
+
+
+def test_final_phase_kept_single_on_edit_and_delete(services):
+    projects, task_types, _tasks = services
+    p = projects.create("P1")
+    t = task_types.create_type(p.id, "T")
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(task_types._db_path) as uow:
+        ordered = sorted(uow.phases.list_by_task_type(t.id), key=lambda x: x.order)
+    first, last = ordered[0], ordered[-1]
+    assert last.is_final and not first.is_final
+    # marcar outra como final desmarca a anterior (radio)
+    task_types.update_phase(first.id, is_final=True)
+    with UnitOfWork.open(task_types._db_path) as uow:
+        finals = [x for x in uow.phases.list_by_task_type(t.id) if x.is_final]
+    assert [x.id for x in finals] == [first.id]
+    # nao da p/ ficar sem final nem excluir a unica
+    with pytest.raises(ValidationError):
+        task_types.update_phase(first.id, is_final=False)
+    with pytest.raises(ValidationError):
+        task_types.delete_phase(first.id)

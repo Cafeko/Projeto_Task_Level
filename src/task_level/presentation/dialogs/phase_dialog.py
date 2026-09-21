@@ -1,9 +1,8 @@
-"""Editor de fase (Parte 8)."""
+"""Editor de fase (ordem/inicio/fim sao automaticos: posicao na lista)."""
 
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
-    QCheckBox,
     QColorDialog,
     QDialog,
     QDialogButtonBox,
@@ -11,7 +10,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QMessageBox,
-    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -34,13 +32,6 @@ class PhaseDialog(QDialog):
         pick = QPushButton("Escolher...")
         pick.clicked.connect(self._pick_color)
         btn_color.addWidget(pick)
-        self._order = QSpinBox()
-        self._order.setRange(0, 999)
-        self._order.setValue(int(spec.get("order", 0)))
-        self._initial = QCheckBox("Fase inicial")
-        self._initial.setChecked(bool(spec.get("is_initial", False)))
-        self._final = QCheckBox("Fase final")
-        self._final.setChecked(bool(spec.get("is_final", False)))
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -50,9 +41,6 @@ class PhaseDialog(QDialog):
         form.addRow("Nome:", self._name)
         form.addRow("Descricao:", self._desc)
         form.addRow("Cor:", btn_color)
-        form.addRow("Ordem:", self._order)
-        form.addRow("", self._initial)
-        form.addRow("", self._final)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(buttons)
@@ -75,9 +63,6 @@ class PhaseDialog(QDialog):
             "name": self._name.text().strip(),
             "description": self._desc.toPlainText(),
             "color": self._color.text().strip() or "#888888",
-            "order": self._order.value(),
-            "is_initial": self._initial.isChecked(),
-            "is_final": self._final.isChecked(),
         }
 
     @classmethod

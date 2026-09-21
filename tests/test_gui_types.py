@@ -29,22 +29,43 @@ def test_validate_type_payload_pure():
     assert validate_type_payload({"name": "", "phases": [], "attributes": []}) != []
     ok = {
         "name": "Bug",
-        "phases": [{"name": "Novo", "is_initial": True}],
+        "phases": [
+            {"name": "Novo", "is_initial": True},
+            {"name": "Pronto", "is_final": True},
+        ],
         "attributes": [{"name": "a"}, {"name": "b"}],
     }
     assert validate_type_payload(ok) == []
     two_initial = {
         "name": "Bug",
         "phases": [
-            {"name": "A", "is_initial": True},
+            {"name": "A", "is_initial": True, "is_final": True},
             {"name": "B", "is_initial": True},
         ],
         "attributes": [],
     }
     assert validate_type_payload(two_initial) != []
-    dup_attr = {
+    two_finals = {
+        "name": "Bug",
+        "phases": [
+            {"name": "A", "is_initial": True, "is_final": True},
+            {"name": "B", "is_final": True},
+        ],
+        "attributes": [],
+    }
+    assert validate_type_payload(two_finals) != []
+    no_final = {
         "name": "Bug",
         "phases": [{"name": "A", "is_initial": True}],
+        "attributes": [],
+    }
+    assert validate_type_payload(no_final) != []
+    dup_attr = {
+        "name": "Bug",
+        "phases": [
+            {"name": "A", "is_initial": True},
+            {"name": "B", "is_final": True},
+        ],
         "attributes": [{"name": "x"}, {"name": "x"}],
     }
     assert validate_type_payload(dup_attr) != []
@@ -96,7 +117,7 @@ def test_task_type_dialog_payload_roundtrip(tmp_path, qapp):
     try:
         assert validate_type_payload(dlg.payload()) != []
         dlg._name.setText("Bug")
-        dlg._phases.append({"name": "Novo", "is_initial": True, "is_final": False})
+        dlg._phases.append({"name": "Novo", "is_initial": True, "is_final": True})
         payload = dlg.payload()
         assert validate_type_payload(payload) == []
         assert payload["name"] == "Bug"
@@ -163,5 +184,100 @@ def test_attribute_dialog_reference_task_config(qapp):
     )
     try:
         assert dlg.data()["reference_config"] == {"target_type_id": 7}
+    finally:
+        dlg.close()
+
+
+def test_phase_dialog_has_no_order_field(qapp):
+    """Ordem e automatica: sai do dialogo de fase."""
+    from task_level.presentation.dialogs.phase_dialog import PhaseDialog
+
+    dlg = PhaseDialog()
+    try:
+        assert "order" not in dlg.data()
+    finally:
+        dlg.close()
+
+
+def test_phases_reorder_by_drag_renumbers(qapp):
+    """Arrastar na lista reordena e renumera (0..n)."""
+    from task_level.presentation.dialogs.task_type_dialog import TaskTypeDialog
+
+    dlg = TaskTypeDialog(
+        None,
+        {
+            "name": "T",
+            "phases": [
+                {"name": "A", "is_initial": True, "order": 0},
+                {"name": "B", "order": 1},
+                {"name": "C", "order": 2},
+            ],
+        },
+    )
+    try:
+        assert [p["order"] for p in dlg._phases] == [0, 1, 2]
+        # simula arrastar A (linha 0) para o fim
+        item = dlg._phase_list.takeItem(0)
+        dlg._phase_list.insertItem(2, item)
+        dlg._sync_order_from_list()
+        assert [p["name"] for p in dlg._phases] == ["B", "C", "A"]
+        assert [p["order"] for p in dlg._phases] == [0, 1, 2]
+        dlg._refresh_phases()  # no app o drop ja refresca
+        assert dlg._phase_list.item(0).text().startswith("0. B")
+    finally:
+        dlg.close()
+
+
+def test_phases_remove_renumbers(qapp):
+    from task_level.presentation.dialogs.task_type_dialog import TaskTypeDialog
+
+    dlg = TaskTypeDialog(
+        None,
+        {
+            "name": "T",
+            "phases": [
+                {"name": "A", "is_initial": True, "order": 0},
+                {"name": "B", "order": 1},
+                {"name": "C", "order": 2},
+            ],
+        },
+    )
+    try:
+        dlg._phase_list.setCurrentRow(1)
+        dlg._remove_phase()
+        assert [p["name"] for p in dlg._phases] == ["A", "C"]
+        assert [p["order"] for p in dlg._phases] == [0, 1]
+    finally:
+        dlg.close()
+
+
+def test_payload_marks_first_last_as_start_end(qapp):
+    """Sem opcao manual: primeira = inicio, ultima = fim."""
+    from task_level.presentation.dialogs.task_type_dialog import TaskTypeDialog
+
+    dlg = TaskTypeDialog(
+        None,
+        {"name": "T", "phases": [{"name": "A"}, {"name": "B"}, {"name": "C"}]},
+    )
+    try:
+        flags = [
+            (p["is_initial"], p["is_final"]) for p in dlg.payload()["phases"]
+        ]
+        assert flags == [(True, False), (False, False), (False, True)]
+        assert "inicio" in dlg._phase_list.item(0).text()
+        assert "fim" in dlg._phase_list.item(2).text()
+    finally:
+        dlg.close()
+
+
+def test_drag_toggle_defaults_locked(qapp):
+    from task_level.presentation.dialogs.task_type_dialog import TaskTypeDialog
+
+    dlg = TaskTypeDialog(None, {"name": "T", "phases": [{"name": "A"}]})
+    try:
+        assert dlg._drag_toggle.isChecked() is False
+        assert dlg._phase_list.dragEnabled() is False
+        dlg._drag_toggle.setChecked(True)
+        assert dlg._phase_list.dragEnabled() is True
     finally:
         dlg.close()

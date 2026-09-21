@@ -36,6 +36,9 @@ def validate_type_payload(payload: dict) -> list[str]:
     initials = [p for p in phases if p.get("is_initial")]
     if len(initials) != 1:
         errors.append("Tipo precisa de exatamente 1 fase inicial.")
+    finals = [p for p in phases if p.get("is_final")]
+    if len(finals) != 1:
+        errors.append("Tipo precisa de exatamente 1 fase final.")
     names = [a.get("name", "") for a in payload.get("attributes", [])]
     if len(names) != len(set(names)):
         errors.append("Nomes de atributos duplicados.")
@@ -131,38 +134,61 @@ class TaskTypeDialog(QDialog):
     # -- fases ----------------------------------------------------------------
 
     def _build_phases_tab(self) -> QWidget:
+        from PySide6.QtWidgets import QAbstractItemView, QLabel
+
         self._phase_list = QListWidget()
         self._phase_list.itemDoubleClicked.connect(self._edit_phase)
+        # arrasto desligado por padrao (evita troca por engano)
+        self._phase_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self._phase_list.setDefaultDropAction(Qt.MoveAction)
+        self._phase_list.model().rowsMoved.connect(self._phases_dropped)
         add = QPushButton("Adicionar")
         edit = QPushButton("Editar")
         remove = QPushButton("Remover")
-        up = QPushButton("Subir")
-        down = QPushButton("Descer")
+        self._drag_toggle = QPushButton()
+        self._drag_toggle.setCheckable(True)
+        self._drag_toggle.setChecked(False)
+        self._drag_toggle.toggled.connect(self._set_drag_enabled)
         add.clicked.connect(self._add_phase)
         edit.clicked.connect(self._edit_phase)
         remove.clicked.connect(self._remove_phase)
-        up.clicked.connect(lambda: self._move_phase(-1))
-        down.clicked.connect(lambda: self._move_phase(1))
         row = QHBoxLayout()
-        for b in (add, edit, remove, up, down):
+        for b in (add, edit, remove, self._drag_toggle):
             row.addWidget(b)
         row.addStretch()
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        self._drag_hint = QLabel("")
+        self._drag_hint.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(self._drag_hint)
         layout.addWidget(self._phase_list)
         layout.addLayout(row)
+        self._set_drag_enabled(False)
         return tab
+
+    def _set_drag_enabled(self, enabled: bool) -> None:
+        self._phase_list.setDragEnabled(enabled)
+        self._phase_list.setAcceptDrops(enabled)
+        self._drag_toggle.setText(
+            "🔓 Reordenar: ligado" if enabled else "🔒 Reordenar: desligado"
+        )
+        self._drag_hint.setText(
+            "Arraste as fases para reordenar."
+            if enabled
+            else "Primeira = inicio, ultima = fim. Ligue Reordenar para arrastar."
+        )
 
     def _refresh_phases(self) -> None:
         from task_level.presentation.widgets.type_badge import make_color_icon
 
         self._phase_list.clear()
+        last = len(self._phases) - 1
         for i, spec in enumerate(self._phases):
             tags = []
-            if spec.get("is_initial"):
-                tags.append("inicial")
-            if spec.get("is_final"):
-                tags.append("final")
+            if i == 0:
+                tags.append("inicio")
+            if i == last:
+                tags.append("fim")
             suffix = f" [{', '.join(tags)}]" if tags else ""
             item = QListWidgetItem(f"{i}. {spec.get('name', '')}{suffix}")
             item.setData(Qt.UserRole, i)
@@ -172,6 +198,7 @@ class TaskTypeDialog(QDialog):
     def _add_phase(self) -> None:
         spec = PhaseDialog.create(self)
         if spec is not None:
+            spec["order"] = len(self._phases)  # fim da fila, automatico
             self._phases.append(spec)
             self._refresh_phases()
 
@@ -182,6 +209,7 @@ class TaskTypeDialog(QDialog):
         spec = PhaseDialog.edit(self, self._phases[row])
         if spec is not None:
             spec["id"] = self._phases[row].get("id")  # preserva vinculo
+            spec["order"] = row  # ordem e sempre a posicao
             self._phases[row] = spec
             self._refresh_phases()
 
@@ -190,18 +218,25 @@ class TaskTypeDialog(QDialog):
         if row < 0:
             return
         del self._phases[row]
+        self._renumber_phases()
         self._refresh_phases()
 
-    def _move_phase(self, delta: int) -> None:
-        row = self._phase_list.currentRow()
-        other = row + delta
-        if row < 0 or not 0 <= other < len(self._phases):
-            return
-        self._phases[row], self._phases[other] = self._phases[other], self._phases[row]
+    def _phases_dropped(self, *_args) -> None:
+        """Apos arrastar: a ordem passa a ser a posicao na lista."""
+        self._sync_order_from_list()
+        self._refresh_phases()
+
+    def _sync_order_from_list(self) -> None:
+        """Reconstroi self._phases na ordem visual e renumera."""
+        ordered = []
+        for row in range(self._phase_list.count()):
+            ordered.append(self._phases[self._phase_list.item(row).data(Qt.UserRole)])
+        self._phases = ordered
+        self._renumber_phases()
+
+    def _renumber_phases(self) -> None:
         for i, spec in enumerate(self._phases):
             spec["order"] = i
-        self._refresh_phases()
-        self._phase_list.setCurrentRow(other)
 
     # -- atributos --------------------------------------------------------------
 
@@ -262,12 +297,19 @@ class TaskTypeDialog(QDialog):
     # -- payload ------------------------------------------------------------------
 
     def payload(self) -> dict:
+        # primeira = inicio, ultima = fim (sempre; sem opcao manual)
+        phases = []
+        for i, spec in enumerate(self._phases):
+            p = dict(spec)
+            p["is_initial"] = (i == 0)
+            p["is_final"] = (i == len(self._phases) - 1)
+            phases.append(p)
         return {
             "name": self._name.text().strip(),
             "description": self._desc.text(),
             "color": self._color.text().strip() or "#888888",
             "icon": self._icon.text().strip(),
-            "phases": self._phases,
+            "phases": phases,
             "attributes": self._attrs,
         }
 
