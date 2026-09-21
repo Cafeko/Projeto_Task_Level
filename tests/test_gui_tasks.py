@@ -270,3 +270,31 @@ def test_task_dialog_select_payload(tmp_path, qapp):
         assert dlg.payload()["values"]["tam"] == "G"
     finally:
         dlg.close()
+
+
+def test_task_dialog_phase_notes_tabs(tmp_path, qapp):
+    from task_level.presentation.dialogs.task_dialog import TaskDialog
+
+    db = tmp_path / "notes.db"
+    pid = ProjectService(db).create("P1").id
+    tid = TaskTypeService(db).create_type(pid, "T").id
+    svc = TaskService(db)
+    task = svc.create_task(pid, tid, "T1")
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(db) as uow:
+        ordered = sorted(uow.phases.list_by_task_type(tid), key=lambda p: p.order)
+    svc.set_phase_note(task.id, ordered[0].id, "nota do inicio")
+
+    dlg = TaskDialog(None, db, pid, task_id=task.id)
+    try:
+        assert dlg._notes_tabs.count() == 3  # uma aba por fase
+        assert dlg._note_edits[ordered[0].id].toPlainText() == "nota do inicio"
+        dlg._note_edits[ordered[1].id].setPlainText("nota do meio")
+        dlg._apply_notes(svc, task.id)
+        assert svc.phase_notes(task.id) == {
+            ordered[0].id: "nota do inicio",
+            ordered[1].id: "nota do meio",
+        }
+    finally:
+        dlg.close()

@@ -59,6 +59,11 @@ task_attributes (
 )
 ```
 
+### 7. Task Phase Notes (observacao da task por fase)
+```sql
+task_phase_notes (id, task_id, phase_id, note, created_at, updated_at)
+```
+
 ---
 
 ## Regras de Negócio

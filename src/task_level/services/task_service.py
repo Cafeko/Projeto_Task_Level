@@ -158,6 +158,31 @@ class TaskService:
                     remove_file(existing.value_text)
             uow.task_attributes.delete(task_id, definition.id)
 
+    def phase_notes(self, task_id: int) -> dict[int, str]:
+        """Observacoes da task por fase: {phase_id: note} (so as preenchidas)."""
+        with UnitOfWork.open(self._db_path) as uow:
+            if uow.tasks.get(task_id) is None:
+                raise NotFoundError(f"task {task_id} nao encontrada")
+            return {n.phase_id: n.note for n in uow.phase_notes.list_by_task(task_id)}
+
+    def set_phase_note(self, task_id: int, phase_id: int, note: str) -> None:
+        """Salva a observacao da task na fase (vazia = apaga)."""
+        from task_level.domain import TaskPhaseNote
+
+        with UnitOfWork.open(self._db_path) as uow:
+            task = uow.tasks.get(task_id)
+            if task is None:
+                raise NotFoundError(f"task {task_id} nao encontrada")
+            phase = uow.phases.get(phase_id)
+            if phase is None:
+                raise NotFoundError(f"phase {phase_id} nao encontrada")
+            if phase.task_type_id != task.task_type_id:
+                raise ValidationError("phase pertence a outro task_type")
+            if not note.strip():
+                uow.phase_notes.delete(task_id, phase_id)
+            else:
+                uow.phase_notes.set(TaskPhaseNote(task_id, phase_id, note.strip()))
+
     def set_file_attribute(
         self, task_id: int, attr_name: str, source: str | Path
     ) -> TaskAttribute:

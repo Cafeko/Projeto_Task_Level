@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -79,6 +80,8 @@ class TaskDialog(QDialog):
         self._date_edits: dict[str, QWidget] = {}
         self._file_pending: dict[str, str] = {}
         self._file_cleared: set[str] = set()
+        self._note_edits: dict[int, QTextEdit] = {}
+        self._ordered_phases: list = []
 
         self.setWindowTitle("Editar task" if task_id else "Nova task")
         self.resize(480, 520)
@@ -114,6 +117,12 @@ class TaskDialog(QDialog):
         attr_box = QVBoxLayout()
         attr_box.addLayout(self._attr_form)
 
+        self._notes_tabs = QTabWidget()
+        self._notes_tabs.setVisible(task_id is not None)
+        notes_label = QLabel("Observacoes por fase:")
+        notes_label.setVisible(task_id is not None)
+        self._notes_label = notes_label
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -121,6 +130,8 @@ class TaskDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addLayout(attr_box)
+        layout.addWidget(self._notes_label)
+        layout.addWidget(self._notes_tabs)
         layout.addStretch()
         layout.addWidget(buttons)
 
@@ -161,6 +172,10 @@ class TaskDialog(QDialog):
             self._origin_phase_id = task.phase_id
             self._target_phase_id = task.phase_id
             self._refresh_phase_stepper()
+            notes = {
+                n.phase_id: n.note for n in uow.phase_notes.list_by_task(task.id)
+            }
+            self._build_notes_tabs(notes)
             self._title.setText(task.title)
             self._desc.setPlainText(task.description)
             self._definitions = uow.attribute_definitions.list_by_task_type(
@@ -172,6 +187,28 @@ class TaskDialog(QDialog):
             }
             self._saved_values = saved
         self._build_fields(prefill=True)
+
+    def _build_notes_tabs(self, notes: dict[int, str]) -> None:
+        """Uma aba de observacao por fase (edit mode)."""
+        self._notes_tabs.clear()
+        self._note_edits = {}
+        self._ordered_phases = list(self._phase_options)
+        current_tab = 0
+        for i, phase in enumerate(self._ordered_phases):
+            editor = QTextEdit()
+            editor.setMaximumHeight(80)
+            editor.setPlaceholderText(f"Observacao sobre '{phase.name}'...")
+            if phase.id is not None and phase.id in notes:
+                editor.setPlainText(notes[phase.id])
+            assert phase.id is not None
+            self._note_edits[phase.id] = editor
+            self._notes_tabs.addTab(editor, phase.name)
+            if phase.id == self._target_phase_id:
+                current_tab = i
+        self._notes_tabs.setCurrentIndex(current_tab)
+        has_phases = bool(self._ordered_phases)
+        self._notes_tabs.setVisible(has_phases)
+        self._notes_label.setVisible(has_phases)
 
     def _step_phase(self, delta: int) -> None:
         """Move o alvo uma fase (botoes Voltar/Avancar)."""
@@ -600,6 +637,7 @@ class TaskDialog(QDialog):
                 )
                 assert task.id is not None
                 self._apply_files(svc, task.id)
+                self._apply_notes(svc, task.id)
                 return task.id
             svc.update_details(self._task_id, data["title"], data["description"])
             with UnitOfWork.open(self._db_path) as uow:
@@ -616,12 +654,18 @@ class TaskDialog(QDialog):
                 else:
                     svc.clear_attribute(self._task_id, d.name)
             self._apply_files(svc, self._task_id)
+            self._apply_notes(svc, self._task_id)
             if data["phase_id"] is not None and data["phase_id"] != task.phase_id:
                 svc.move_phase(self._task_id, data["phase_id"])
             return self._task_id
         except DomainError as e:
             QMessageBox.critical(self, "Erro", str(e))
             raise
+
+    def _apply_notes(self, svc, task_id: int) -> None:
+        """Salva as observacoes por fase (vazia = apaga)."""
+        for phase_id, editor in self._note_edits.items():
+            svc.set_phase_note(task_id, phase_id, editor.toPlainText())
 
     def _apply_files(self, svc, task_id: int) -> None:
         """Copia anexos pendentes e limpa os marcados (sem tocar nos demais)."""

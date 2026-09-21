@@ -446,3 +446,24 @@ def test_select_attribute_options_validated(services):
     assert got is not None and got.value_text == "M"
     with pytest.raises(ValidationError):  # fora das opcoes
         tasks.set_attribute(task.id, "tam", "XG")
+
+
+def test_phase_notes_crud(services):
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    t = task_types.create_type(p.id, "T")
+    task = tasks.create_task(p.id, t.id, "T1")
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(task_types._db_path) as uow:
+        ordered = sorted(uow.phases.list_by_task_type(t.id), key=lambda x: x.order)
+    first, second = ordered[0].id, ordered[1].id
+
+    assert tasks.phase_notes(task.id) == {}
+    tasks.set_phase_note(task.id, first, "começou bem")
+    tasks.set_phase_note(task.id, second, "  ")
+    assert tasks.phase_notes(task.id) == {first: "começou bem"}
+    tasks.set_phase_note(task.id, first, "")  # vazia apaga
+    assert tasks.phase_notes(task.id) == {}
+    with pytest.raises(NotFoundError):
+        tasks.set_phase_note(task.id, 999999, "x")

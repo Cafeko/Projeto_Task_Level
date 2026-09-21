@@ -260,8 +260,25 @@ class TaskAttribute:
         _ = value  # None permitido = atributo opcional vazio
 
 
-def expected_fields() -> list[str]:
-    return [
+@dataclass
+class TaskPhaseNote:
+    """Observacao livre da task em uma fase (ex: o que aconteceu ali)."""
+
+    task_id: int
+    phase_id: int
+    note: str = ""
+    id: int | None = None
+    created_at: datetime = field(default_factory=utcnow)
+    updated_at: datetime = field(default_factory=utcnow)
+
+    def validate(self) -> None:
+        if not self.task_id or self.task_id <= 0:
+            raise ValidationError("task_phase_note.task_id invalido")
+        if not self.phase_id or self.phase_id <= 0:
+            raise ValidationError("task_phase_note.phase_id invalido")
+
+
+def expected_fields() -> list[str]:    return [
         "value_text",
         "value_number",
         "value_boolean",

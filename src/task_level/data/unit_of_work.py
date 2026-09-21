@@ -11,6 +11,7 @@ from .repositories.attribute_definition_repository import AttributeDefinitionRep
 from .repositories.phase_repository import PhaseRepository
 from .repositories.project_repository import ProjectRepository
 from .repositories.task_attribute_repository import TaskAttributeRepository
+from .repositories.task_phase_note_repository import TaskPhaseNoteRepository
 from .repositories.task_repository import TaskRepository
 from .repositories.task_type_repository import TaskTypeRepository
 
@@ -24,6 +25,7 @@ class UnitOfWork:
         self.phases = PhaseRepository(conn)
         self.tasks = TaskRepository(conn)
         self.task_attributes = TaskAttributeRepository(conn)
+        self.phase_notes = TaskPhaseNoteRepository(conn)
 
     @classmethod
     def open(cls, db_path: str | Path) -> UnitOfWork:
