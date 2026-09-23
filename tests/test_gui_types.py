@@ -297,6 +297,169 @@ def test_drag_toggle_defaults_locked(qapp):
         dlg.close()
 
 
+def test_attribute_dialog_has_no_order_field(qapp):
+    """Ordem e automatica: sai do dialogo de atributo (como nas fases)."""
+    from task_level.presentation.dialogs.attribute_dialog import AttributeDialog
+
+    dlg = AttributeDialog(None, {"name": "a", "label": "A", "type": "text"})
+    try:
+        assert "order" not in dlg.data()
+    finally:
+        dlg.close()
+
+
+def _attr_dialog(*names: str):
+    from task_level.presentation.dialogs.task_type_dialog import TaskTypeDialog
+
+    return TaskTypeDialog(
+        None,
+        {
+            "name": "T",
+            "phases": [{"name": "P"}],
+            "attributes": [
+                {"name": n, "label": n.upper(), "type": "text", "order": i}
+                for i, n in enumerate(names)
+            ],
+        },
+    )
+
+
+def _move_table_row(table, src: int, dst: int) -> None:
+    """Simula o arrasto de uma linha (reordena visualmente, como o drop)."""
+    cells = [table.takeItem(src, c) for c in range(table.columnCount())]
+    table.removeRow(src)
+    table.insertRow(dst)
+    for c, item in enumerate(cells):
+        table.setItem(dst, c, item)
+
+
+def test_attrs_reorder_by_drag_renumbers(qapp):
+    """Arrastar a linha reordena e renumera (0..n), como nas fases."""
+    dlg = _attr_dialog("a", "b", "c")
+    try:
+        assert [a["order"] for a in dlg._attrs] == [0, 1, 2]
+        # simula arrastar A (linha 0) para o fim
+        _move_table_row(dlg._attr_table, 0, 2)
+        dlg._sync_attrs_order_from_list()
+        assert [a["name"] for a in dlg._attrs] == ["b", "c", "a"]
+        assert [a["order"] for a in dlg._attrs] == [0, 1, 2]
+        dlg._refresh_attrs()  # no app o drop ja refresca
+        assert dlg._attr_table.item(0, 0).text() == "b"
+        assert dlg._attr_table.item(0, 1).text() == "B"
+        assert [a["order"] for a in dlg.payload()["attributes"]] == [0, 1, 2]
+    finally:
+        dlg.close()
+
+
+def test_attr_cells_display_only(qapp):
+    """Linhas so exibem/arrastam: sem edicao inline nem drop em cima."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QAbstractItemView
+
+    dlg = _attr_dialog("a", "b")
+    try:
+        assert (
+            dlg._attr_table.editTriggers() == QAbstractItemView.NoEditTriggers
+        )
+        for row in range(dlg._attr_table.rowCount()):
+            for col in range(dlg._attr_table.columnCount()):
+                flags = dlg._attr_table.item(row, col).flags()
+                assert not flags & Qt.ItemIsEditable
+                assert not flags & Qt.ItemIsDropEnabled
+                assert flags & Qt.ItemIsSelectable
+    finally:
+        dlg.close()
+
+
+def test_attrs_drop_applies_after_event_loop(qapp):
+    """Drop real aplica a ordem assim que termina (sem corromper linhas)."""
+    from PySide6.QtWidgets import QApplication
+
+    dlg = _attr_dialog("a", "b", "c")
+    try:
+        _move_table_row(dlg._attr_table, 0, 2)
+        dlg._attrs_dropped()  # agenda; o drop ainda esta terminando
+        QApplication.processEvents()  # drop termina -> aplica
+        assert [a["name"] for a in dlg._attrs] == ["b", "c", "a"]
+        assert [a["order"] for a in dlg._attrs] == [0, 1, 2]
+        assert dlg._attr_table.rowCount() == 3
+        assert dlg._attr_table.item(2, 0).text() == "a"
+        assert dlg._attr_table.item(2, 1).text() == "A"
+    finally:
+        dlg.close()
+
+
+def test_attrs_sync_ignores_stray_row(qapp):
+    """Linha estranha/vazia nao apaga specs (nao perde dados)."""
+    dlg = _attr_dialog("a", "b")
+    try:
+        dlg._attr_table.insertRow(2)  # linha vazia, sem UserRole
+        dlg._sync_attrs_order_from_list()
+        assert [a["name"] for a in dlg._attrs] == ["a", "b"]
+        assert [a["order"] for a in dlg._attrs] == [0, 1]
+    finally:
+        dlg.close()
+
+
+def test_attrs_remove_renumbers(qapp):
+    dlg = _attr_dialog("a", "b", "c")
+    try:
+        dlg._attr_table.setCurrentCell(1, 0)
+        dlg._remove_attr()
+        assert [a["name"] for a in dlg._attrs] == ["a", "c"]
+        assert [a["order"] for a in dlg._attrs] == [0, 1]
+    finally:
+        dlg.close()
+
+
+def test_attr_drag_toggle_defaults_locked(qapp):
+    from task_level.presentation.dialogs.task_type_dialog import TaskTypeDialog
+
+    dlg = TaskTypeDialog(None, {"name": "T", "phases": [{"name": "A"}]})
+    try:
+        assert dlg._attr_drag_toggle.isChecked() is False
+        assert dlg._attr_table.dragEnabled() is False
+        dlg._attr_drag_toggle.setChecked(True)
+        assert dlg._attr_table.dragEnabled() is True
+    finally:
+        dlg.close()
+
+
+def test_attr_order_persists_in_list_order(tmp_path, qapp):
+    """Salvar mante a ordem da lista (posicao vira order no banco)."""
+    from task_level.data import UnitOfWork
+    from task_level.presentation.dialogs.task_type_manager_dialog import (
+        TaskTypeManagerDialog,
+    )
+
+    db = tmp_path / "attr_order.db"
+    pid = ProjectService(db).create("P1").id
+    tid = TaskTypeService(db).create_type(
+        pid,
+        "T",
+        attributes=[
+            {"name": "a", "label": "A", "type": "text"},
+            {"name": "b", "label": "B", "type": "text"},
+            {"name": "c", "label": "C", "type": "text"},
+        ],
+    ).id
+    mgr = TaskTypeManagerDialog(None, db, pid)
+    try:
+        payload = mgr._load_payload(tid)
+        # simula arrastar A para o fim (como no dialogo)
+        attrs = payload["attributes"]
+        payload["attributes"] = [attrs[1], attrs[2], attrs[0]]
+        mgr._apply_edit(tid, payload)
+        with UnitOfWork.open(db) as uow:
+            names = [
+                a.name
+                for a in uow.attribute_definitions.list_by_task_type(tid)
+            ]
+        assert names == ["b", "c", "a"]
+    finally:
+        mgr.close()
+
+
 def test_phase_dialog_conditions_roundtrip(qapp):
     from task_level.presentation.dialogs.phase_dialog import PhaseDialog
 

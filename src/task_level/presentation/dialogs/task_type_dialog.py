@@ -268,39 +268,81 @@ class TaskTypeDialog(QDialog):
     # -- atributos --------------------------------------------------------------
 
     def _build_attrs_tab(self) -> QWidget:
+        from PySide6.QtWidgets import QAbstractItemView, QLabel
+
         self._attr_table = QTableWidget(0, 4)
         self._attr_table.setHorizontalHeaderLabels(["Nome", "Rotulo", "Tipo", "Obrig."])
         self._attr_table.horizontalHeader().setStretchLastSection(True)
+        self._attr_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._attr_table.setDragDropOverwriteMode(False)
+        # Linhas servem so p/ exibir e arrastar: sem edicao inline.
+        # Editar e so pelo botao/dialogo de atributo.
+        self._attr_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._attr_table.itemDoubleClicked.connect(self._edit_attr)
+        # arrasto desligado por padrao (evita troca por engano, como nas fases)
+        self._attr_table.setDragDropMode(QAbstractItemView.InternalMove)
+        self._attr_table.setDefaultDropAction(Qt.MoveAction)
+        self._attr_table.model().rowsMoved.connect(self._attrs_dropped)
         add = QPushButton("Adicionar")
         edit = QPushButton("Editar")
         remove = QPushButton("Remover")
+        self._attr_drag_toggle = QPushButton()
+        self._attr_drag_toggle.setCheckable(True)
+        self._attr_drag_toggle.setChecked(False)
+        self._attr_drag_toggle.toggled.connect(self._set_attr_drag_enabled)
         add.clicked.connect(self._add_attr)
         edit.clicked.connect(self._edit_attr)
         remove.clicked.connect(self._remove_attr)
         row = QHBoxLayout()
-        for b in (add, edit, remove):
+        for b in (add, edit, remove, self._attr_drag_toggle):
             row.addWidget(b)
         row.addStretch()
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        self._attr_drag_hint = QLabel("")
+        self._attr_drag_hint.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(self._attr_drag_hint)
         layout.addWidget(self._attr_table)
         layout.addLayout(row)
+        self._set_attr_drag_enabled(False)
         return tab
+
+    def _set_attr_drag_enabled(self, enabled: bool) -> None:
+        self._attr_table.setDragEnabled(enabled)
+        self._attr_table.setAcceptDrops(enabled)
+        self._attr_drag_toggle.setText(
+            "🔓 Reordenar: ligado" if enabled else "🔒 Reordenar: desligado"
+        )
+        self._attr_drag_hint.setText(
+            "Arraste as linhas para reordenar."
+            if enabled
+            else "Ordem da tabela = ordem no formulario. Ligue Reordenar para arrastar."
+        )
 
     def _refresh_attrs(self) -> None:
         self._attr_table.setRowCount(len(self._attrs))
         for i, spec in enumerate(self._attrs):
-            self._attr_table.setItem(i, 0, QTableWidgetItem(spec.get("name", "")))
-            self._attr_table.setItem(i, 1, QTableWidgetItem(spec.get("label", "")))
-            self._attr_table.setItem(i, 2, QTableWidgetItem(spec.get("type", "")))
-            self._attr_table.setItem(
-                i, 3, QTableWidgetItem("sim" if spec.get("required") else "nao")
-            )
+            cells = [
+                QTableWidgetItem(spec.get("name", "")),
+                QTableWidgetItem(spec.get("label", "")),
+                QTableWidgetItem(spec.get("type", "")),
+                QTableWidgetItem("sim" if spec.get("required") else "nao"),
+            ]
+            for cell in cells:
+                # somente exibicao (sem edicao inline nem drop em cima)
+                cell.setFlags(
+                    cell.flags()
+                    & ~Qt.ItemIsEditable
+                    & ~Qt.ItemIsDropEnabled
+                )
+            cells[0].setData(Qt.UserRole, i)
+            for col, cell in enumerate(cells):
+                self._attr_table.setItem(i, col, cell)
 
     def _add_attr(self) -> None:
         spec = AttributeDialog.create(self, ref_targets=self._ref_targets)
         if spec is not None:
+            spec["order"] = len(self._attrs)  # fim da fila, automatico
             self._attrs.append(spec)
             self._refresh_attrs()
 
@@ -310,7 +352,8 @@ class TaskTypeDialog(QDialog):
             return
         spec = AttributeDialog.edit(self, self._attrs[row], ref_targets=self._ref_targets)
         if spec is not None:
-            spec["id"] = self._attrs[row].get("id")
+            spec["id"] = self._attrs[row].get("id")  # preserva vinculo
+            spec["order"] = row  # ordem e sempre a posicao
             self._attrs[row] = spec
             self._refresh_attrs()
 
@@ -319,7 +362,42 @@ class TaskTypeDialog(QDialog):
         if row < 0:
             return
         del self._attrs[row]
+        self._renumber_attrs()
         self._refresh_attrs()
+
+    def _attrs_dropped(self, *_args) -> None:
+        """Apos arrastar: a ordem passa a ser a posicao na tabela.
+
+        Adiado p/ depois que o drop termina: reconstruir a tabela no meio
+        da operacao corrompia linhas (valores sumiam / linhas vazias).
+        """
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(0, self._finish_attrs_drop)
+
+    def _finish_attrs_drop(self) -> None:
+        self._sync_attrs_order_from_list()
+        self._refresh_attrs()
+
+    def _sync_attrs_order_from_list(self) -> None:
+        """Reconstroi self._attrs na ordem visual e renumera."""
+        ordered = []
+        for row in range(self._attr_table.rowCount()):
+            item = self._attr_table.item(row, 0)
+            if item is None:
+                continue
+            index = item.data(Qt.UserRole)
+            if not isinstance(index, int) or not 0 <= index < len(self._attrs):
+                continue
+            ordered.append(self._attrs[index])
+        if len(ordered) != len(self._attrs):
+            return  # drop incompleto/linha estranha: nao perde dados
+        self._attrs = ordered
+        self._renumber_attrs()
+
+    def _renumber_attrs(self) -> None:
+        for i, spec in enumerate(self._attrs):
+            spec["order"] = i
 
     # -- payload ------------------------------------------------------------------
 
@@ -331,13 +409,19 @@ class TaskTypeDialog(QDialog):
             p["is_initial"] = (i == 0)
             p["is_final"] = (i == len(self._phases) - 1)
             phases.append(p)
+        # ordem dos atributos e sempre a posicao na lista (como nas fases)
+        attributes = []
+        for i, spec in enumerate(self._attrs):
+            a = dict(spec)
+            a["order"] = i
+            attributes.append(a)
         return {
             "name": self._name.text().strip(),
             "description": self._desc.text(),
             "color": self._color.text().strip() or "#888888",
             "icon": self._icon.text().strip(),
             "phases": phases,
-            "attributes": self._attrs,
+            "attributes": attributes,
         }
 
     def accept(self) -> None:

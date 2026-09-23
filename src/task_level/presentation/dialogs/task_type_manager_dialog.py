@@ -188,7 +188,9 @@ class TaskTypeManagerDialog(QDialog):
             self._service.delete_phase(pid)
         old_attr_ids = {a["id"] for a in old["attributes"] if a.get("id")}
         new_attr_ids = {a.get("id") for a in payload["attributes"] if a.get("id")}
-        for spec in payload["attributes"]:
+        # ordem e sempre a posicao na lista (como nas fases)
+        for i, spec in enumerate(payload["attributes"]):
+            spec["order"] = i
             if spec.get("id") is None:
                 self._service.add_attribute(type_id, spec)
             else:

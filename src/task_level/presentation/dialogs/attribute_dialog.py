@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -68,9 +67,6 @@ class AttributeDialog(QDialog):
         self._required = QCheckBox("Obrigatorio")
         self._required.setChecked(bool(spec.get("required", False)))
         self._default = QLineEdit(spec.get("default_value", ""))
-        self._order = QSpinBox()
-        self._order.setRange(0, 999)
-        self._order.setValue(int(spec.get("order", 0)))
 
         # -- secao de referencia (so visivel p/ tipos de referencia) ---------
         self._ref_section = QWidget()
@@ -108,7 +104,6 @@ class AttributeDialog(QDialog):
         form.addRow("Tipo:", self._type)
         form.addRow("", self._required)
         form.addRow("Padrao:", self._default)
-        form.addRow("Ordem:", self._order)
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(self._ref_section)
@@ -244,13 +239,13 @@ class AttributeDialog(QDialog):
         super().accept()
 
     def data(self) -> dict:
+        # sem campo de ordem: a posicao na lista define (como nas fases)
         return {
             "name": self._name.text().strip(),
             "label": self._label.text().strip(),
             "type": self._type.currentData(),
             "required": self._required.isChecked(),
             "default_value": self._default.text(),
-            "order": self._order.value(),
             "reference_config": self._reference_config_data(),
             "options": self._options_data(),
         }
