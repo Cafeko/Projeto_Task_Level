@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
     QStackedWidget,
@@ -157,9 +158,13 @@ class ProjectView(QWidget):
 
         self._all_list = QListWidget()
         self._all_list.itemDoubleClicked.connect(self._open_from_list)
+        self._all_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._all_list.customContextMenuRequested.connect(self._menu_from_list)
         self._grouped_tree = QTreeWidget()
         self._grouped_tree.setHeaderLabels(["Task", "Fase", "Atualizada"])
         self._grouped_tree.itemDoubleClicked.connect(self._open_from_tree)
+        self._grouped_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._grouped_tree.customContextMenuRequested.connect(self._menu_from_tree)
         # coluna parte do tamanho do conteudo, mas o usuario pode arrastar
         tree_header = self._grouped_tree.header()
         tree_header.setSectionResizeMode(0, QHeaderView.Interactive)
@@ -537,15 +542,59 @@ class ProjectView(QWidget):
             self._grouped_tree.resizeColumnToContents(col)
 
     def _open_from_list(self, item: QListWidgetItem) -> None:
-        if TaskDialog.edit(self, self._db_path, self.project_id, item.data(Qt.UserRole)):
-            self._load_all()
+        self._open_task_id(item.data(Qt.UserRole))
 
     def _open_from_tree(self, item: QTreeWidgetItem) -> None:
         task_id = item.data(0, Qt.UserRole)
         if task_id is None:  # cabecalho do tipo
             return
+        self._open_task_id(task_id)
+
+    def _menu_from_list(self, pos) -> None:
+        item = self._all_list.itemAt(pos)
+        if item is None:
+            return
+        self._all_list.setCurrentItem(item)
+        self._task_menu(item.data(Qt.UserRole), self._all_list.viewport().mapToGlobal(pos))
+
+    def _menu_from_tree(self, pos) -> None:
+        item = self._grouped_tree.itemAt(pos)
+        if item is None:
+            return
+        task_id = item.data(0, Qt.UserRole)
+        if task_id is None:  # cabecalho do tipo: sem menu
+            return
+        self._grouped_tree.setCurrentItem(item)
+        self._task_menu(task_id, self._grouped_tree.viewport().mapToGlobal(pos))
+
+    def _task_menu(self, task_id: int, global_pos) -> None:
+        menu = QMenu(self)
+        act_open = menu.addAction("Abrir")
+        act_delete = menu.addAction("Excluir")
+        chosen = menu.exec(global_pos)
+        if chosen == act_open:
+            self._open_task_id(task_id)
+        elif chosen == act_delete:
+            self._delete_task_id(task_id)
+
+    def _open_task_id(self, task_id: int) -> None:
+        if self.project_id is None:
+            return
         if TaskDialog.edit(self, self._db_path, self.project_id, task_id):
             self._load_all()
+
+    def _delete_task_id(self, task_id: int) -> None:
+        if self.project_id is None:
+            return
+        answer = QMessageBox.question(self, "Excluir task", "Excluir esta task?")
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            TaskService(self._db_path).delete(task_id)
+        except DomainError as e:
+            QMessageBox.critical(self, "Erro", str(e))
+            return
+        self._load_all()
 
     # -- kanban ---------------------------------------------------------------------
 
