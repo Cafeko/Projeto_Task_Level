@@ -180,14 +180,10 @@ class TaskTypeManagerDialog(QDialog):
         old = self._load_payload(type_id)
         old_phase_ids = {p["id"] for p in old["phases"] if p.get("id")}
         new_phase_ids = {p.get("id") for p in payload["phases"] if p.get("id")}
-        for spec in payload["phases"]:
-            if spec.get("id") is None:
-                self._service.add_phase(type_id, **{k: v for k, v in spec.items()})
-            else:
-                pid = spec["id"]
-                self._service.update_phase(
-                    pid, **{k: v for k, v in spec.items() if k != "id"}
-                )
+        # Lote unico: reordenar (que troca inicio/fim de lugar) nao pode validar
+        # o estado intermediario de cada fase (era o erro "precisa manter 1 fase
+        # final" em tipos de 2 fases). save_phases valida so o estado final.
+        self._service.save_phases(type_id, payload["phases"])
         for pid in old_phase_ids - new_phase_ids:
             self._service.delete_phase(pid)
         old_attr_ids = {a["id"] for a in old["attributes"] if a.get("id")}

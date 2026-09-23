@@ -356,6 +356,91 @@ def test_final_phase_kept_single_on_edit_and_delete(services):
         task_types.delete_phase(first.id)
 
 
+def _phase_specs(db_path, type_id):
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(db_path) as uow:
+        return [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "color": p.color,
+                "order": p.order,
+                "is_initial": p.is_initial,
+                "is_final": p.is_final,
+                "enter_conditions": p.enter_conditions,
+            }
+            for p in sorted(
+                uow.phases.list_by_task_type(type_id), key=lambda x: x.order
+            )
+        ]
+
+
+def test_save_phases_reorder_two_phases(services):
+    """Reordenar tipo de 2 fases nao pode dizer 'precisa manter 1 fase final'."""
+    projects, task_types, _tasks = services
+    p = projects.create("P1")
+    t = task_types.create_type(
+        p.id,
+        "T",
+        phases=[
+            {"name": "A", "is_initial": True},
+            {"name": "B", "is_final": True},
+        ],
+    )
+    specs = _phase_specs(task_types._db_path, t.id)
+    # arrasta B p/ primeira posicao (dialogo: flags pela posicao)
+    specs = [specs[1], specs[0]]
+    for i, s in enumerate(specs):
+        s["order"] = i
+        s["is_initial"] = (i == 0)
+        s["is_final"] = (i == len(specs) - 1)
+    task_types.save_phases(t.id, specs)
+    after = _phase_specs(task_types._db_path, t.id)
+    assert [s["name"] for s in after] == ["B", "A"]
+    assert after[0]["is_initial"] and not after[0]["is_final"]
+    assert after[1]["is_final"] and not after[1]["is_initial"]
+
+
+def test_save_phases_move_final_to_middle(services):
+    """Tirar a final do fim (3 fases) tambem valia o mesmo erro."""
+    projects, task_types, _tasks = services
+    p = projects.create("P1")
+    t = task_types.create_type(
+        p.id,
+        "T",
+        phases=[
+            {"name": "A", "is_initial": True},
+            {"name": "B"},
+            {"name": "C", "is_final": True},
+        ],
+    )
+    specs = _phase_specs(task_types._db_path, t.id)
+    specs = [specs[0], specs[2], specs[1]]  # A, C, B
+    for i, s in enumerate(specs):
+        s["order"] = i
+        s["is_initial"] = (i == 0)
+        s["is_final"] = (i == len(specs) - 1)
+    task_types.save_phases(t.id, specs)
+    after = _phase_specs(task_types._db_path, t.id)
+    assert [s["name"] for s in after] == ["A", "C", "B"]
+    assert after[-1]["is_final"] and after[0]["is_initial"]
+
+
+def test_save_phases_rejects_bad_lot(services):
+    projects, task_types, _tasks = services
+    p = projects.create("P1")
+    t = task_types.create_type(p.id, "T")
+    specs = _phase_specs(task_types._db_path, t.id)
+    no_final = [dict(s, is_final=False) for s in specs]
+    with pytest.raises(ValidationError):
+        task_types.save_phases(t.id, no_final)
+    two_initials = [dict(s, is_initial=True) for s in specs]
+    with pytest.raises(ValidationError):
+        task_types.save_phases(t.id, two_initials)
+
+
 def test_currency_and_date_attributes(services):
     projects, task_types, tasks = services
     p = projects.create("P1")

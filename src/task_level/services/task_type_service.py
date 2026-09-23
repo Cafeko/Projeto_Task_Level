@@ -128,6 +128,70 @@ class TaskTypeService:
                 uow.phases.unset_finals(task_type_id)
             return uow.phases.add(phase)
 
+    def save_phases(self, task_type_id: int, specs: list[dict]) -> list[Phase]:
+        """Salva o conjunto de fases de uma vez (cria as sem "id", atualiza as demais).
+
+        Valida o estado FINAL (exatamente 1 inicial + 1 final no lote) em vez
+        de validar a cada fase: updates sequenciais quebravam ao mover o papel
+        inicial/final entre fases (ex: reordenar um tipo de 2 fases dizia
+        "tipo precisa manter 1 fase final"). Roda em uma transacao unica.
+        Specs com "id" precisam pertencer a este tipo.
+        """
+        with UnitOfWork.open(self._db_path) as uow:
+            if uow.task_types.get(task_type_id) is None:
+                raise NotFoundError(f"task_type {task_type_id} nao encontrado")
+            if len([s for s in specs if s.get("is_initial")]) != 1:
+                raise ValidationError("tipo precisa de exatamente 1 fase inicial")
+            if len([s for s in specs if s.get("is_final")]) != 1:
+                raise ValidationError("tipo precisa de exatamente 1 fase final")
+            out: list[Phase] = []
+            for i, spec in enumerate(specs):
+                pid = spec.get("id")
+                if pid is None:
+                    phase = uow.phases.add(
+                        Phase(
+                            task_type_id=task_type_id,
+                            name=spec.get("name", ""),
+                            description=spec.get("description", ""),
+                            color=spec.get("color", "#888888"),
+                            order=int(spec.get("order", i)),
+                            is_initial=bool(spec.get("is_initial", False)),
+                            is_final=bool(spec.get("is_final", False)),
+                            enter_conditions=spec.get("enter_conditions"),
+                        )
+                    )
+                    if phase.is_initial:
+                        uow.phases.unset_initials(task_type_id, except_id=phase.id)
+                    if phase.is_final:
+                        uow.phases.unset_finals(task_type_id, except_id=phase.id)
+                    out.append(phase)
+                else:
+                    phase = uow.phases.get(pid)
+                    if phase is None:
+                        raise NotFoundError(f"phase {pid} nao encontrada")
+                    if phase.task_type_id != task_type_id:
+                        raise ValidationError("phase pertence a outro task_type")
+                    phase.name = spec.get("name", phase.name)
+                    if "description" in spec:
+                        phase.description = spec["description"]
+                    if "color" in spec:
+                        phase.color = spec["color"]
+                    if "order" in spec:
+                        phase.order = int(spec["order"])
+                    if "is_initial" in spec:
+                        phase.is_initial = bool(spec["is_initial"])
+                    if "is_final" in spec:
+                        phase.is_final = bool(spec["is_final"])
+                    if "enter_conditions" in spec:
+                        phase.enter_conditions = spec["enter_conditions"]
+                    if phase.is_initial:
+                        uow.phases.unset_initials(task_type_id, except_id=pid)
+                    if phase.is_final:
+                        uow.phases.unset_finals(task_type_id, except_id=pid)
+                    uow.phases.update(phase)
+                    out.append(phase)
+            return out
+
     def update_phase(self, phase_id: int, **fields) -> Phase:
         with UnitOfWork.open(self._db_path) as uow:
             phase = uow.phases.get(phase_id)
