@@ -189,9 +189,17 @@ class TaskTypeDialog(QDialog):
                 tags.append("inicio")
             if i == last:
                 tags.append("fim")
-            conds = spec.get("enter_conditions") or []
-            if conds:
-                tags.append(f"{len(conds)} condicao(oes)")
+            raw_conds = spec.get("enter_conditions")
+            try:
+                from task_level.services.filters import count_conditions as _count
+
+                _n_conds, _n_groups = _count(raw_conds)
+            except Exception:
+                _n_conds = len(raw_conds) if isinstance(raw_conds, list) else 0
+                _n_groups = 1
+            if _n_conds:
+                extra = f" em {_n_groups} grupos" if _n_groups > 1 else ""
+                tags.append(f"{_n_conds} condicao(oes){extra}")
             suffix = f" [{', '.join(tags)}]" if tags else ""
             item = QListWidgetItem(f"{i}. {spec.get('name', '')}{suffix}")
             item.setData(Qt.UserRole, i)

@@ -171,7 +171,7 @@ class Phase:
     order: int = 0
     is_initial: bool = False
     is_final: bool = False
-    enter_conditions: list[dict] | None = None  # [{attr, op, value}] p/ entrar
+    enter_conditions: list[dict] | dict | None = None  # lista (AND) ou arvore {logic,rules}
     id: int | None = None
     created_at: datetime = field(default_factory=utcnow)
 
@@ -180,13 +180,9 @@ class Phase:
             raise ValidationError("phase.task_type_id invalido")
         _require_non_empty(self.name, "phase.name")
         if self.enter_conditions is not None:
-            if not isinstance(self.enter_conditions, list) or not all(
-                isinstance(c, dict)
-                and isinstance(c.get("attr"), str)
-                and isinstance(c.get("op"), str)
-                for c in self.enter_conditions
-            ):
-                raise ValidationError("phase.enter_conditions invalido")
+            from task_level.services.filters import validate_conditions
+
+            validate_conditions(self.enter_conditions)
 
 
 @dataclass

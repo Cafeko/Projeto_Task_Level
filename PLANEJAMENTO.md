@@ -153,9 +153,10 @@ task_level/
 
 ## Próximos Passos (Pós-MVP)
 - [x] Condições de transição entre fases → `Phase.enter_conditions`
-  (lista AND de {attr, op, value} por fase, mesmo operadores do filtro),
-  avaliadas em `TaskService.check_move`; UI desabilita Voltar/Avancar com
-  o motivo (`transition_block`).
+  (lista AND legada ou árvore aninhada `{"logic":"AND"|"OR","rules":[...]}`,
+  mesmo operadores do filtro), avaliadas em `TaskService.check_move`;
+  UI edita linhas como o filtro + grupos E/OU aninháveis e desabilita
+  Voltar/Avancar com o motivo (`transition_block`).
 - Automações (quando X → faça Y)
 - Views salvas / filtros avançados
 - Import/Export (JSON, CSV)

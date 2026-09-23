@@ -1003,11 +1003,21 @@ class TaskService:
 
     @staticmethod
     def _check_conditions(uow: UnitOfWork, task: Task, phase: Phase) -> None:
-        """Avalia as condicoes de entrada da fase (todas precisam casar)."""
-        from task_level.services.filters import matches_attr, op_label
+        """Avalia a arvore AND/OR de entrada (grupos: E dentro, OU entre)."""
+        from task_level.services.filters import (
+            describe_tree,
+            evaluate_tree,
+            is_leaf,
+            matches_attr,
+            normalize_conditions,
+            op_label,
+        )
 
-        conditions = phase.enter_conditions or []
-        if not conditions:
+        raw = phase.enter_conditions
+        if not raw:
+            return
+        tree = normalize_conditions(raw)
+        if tree is None:
             return
         assert task.id is not None
         definitions = {
@@ -1019,23 +1029,46 @@ class TaskService:
             v.attribute_definition_id: v
             for v in uow.task_attributes.list_by_task(task.id)
         }
-        for cond in conditions:
+
+        def _match(cond: dict) -> bool:
             name = cond.get("attr", "")
             definition = definitions.get(name)
             if definition is None or definition.id is None:
-                raise ValidationError(
-                    f"para entrar em '{phase.name}': atributo '{name}' nao existe mais"
-                )
+                return False
             value = values.get(definition.id)
-            if not matches_attr(
+            return matches_attr(
                 definition, value, cond.get("op", ""), str(cond.get("value", ""))
-            ):
-                label = op_label(definition.type, cond.get("op", ""))
-                want = f" {cond.get('value', '')}" if cond.get("value") else ""
-                raise ValidationError(
-                    f"para entrar em '{phase.name}': "
-                    f"'{definition.label}' precisa ser {label}{want}"
-                )
+            )
+
+        # atributo removido: bloqueia com aviso claro (vale p/ qualquer ramo)
+        missing: list[str] = []
+
+        def _collect(node: dict) -> None:
+            if is_leaf(node):
+                if node.get("attr", "") not in definitions:
+                    missing.append(str(node.get("attr", "")))
+                return
+            for r in node.get("rules", []):
+                _collect(r)
+
+        _collect(tree)
+        if missing:
+            raise ValidationError(
+                f"para entrar em '{phase.name}': atributo '{missing[0]}' nao existe mais"
+            )
+        if evaluate_tree(tree, _match):
+            return
+
+        def _leaf_text(cond: dict) -> str:
+            definition = definitions.get(cond.get("attr", ""))
+            if definition is None:
+                return f"'{cond.get('attr', '')}' ?"
+            label = op_label(definition.type, cond.get("op", ""))
+            want = f" {cond.get('value', '')}" if cond.get("value") else ""
+            return f"'{definition.label}' {label}{want}"
+
+        detail = describe_tree(tree, _leaf_text)
+        raise ValidationError(f"para entrar em '{phase.name}': precisa {detail}")
 
     def move_phase(self, task_id: int, phase_id: int) -> Task:
         with UnitOfWork.open(self._db_path) as uow:

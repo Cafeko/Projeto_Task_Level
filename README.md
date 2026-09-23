@@ -29,8 +29,10 @@ uv run ruff check src tests       # lint
   (ex: Novo > Em andamento > Concluido).
 - Todas as tasks do mesmo tipo tem os mesmos atributos.
 - Atributos obrigatorios bloqueiam a ida para a fase final.
-- Fases podem ter **condicoes de entrada** (ex: Nota maior que 5 para
-  entrar em Revisao); com condicao falsa o Avancar desabilita com o motivo.
+- Fases podem ter **condicoes de entrada** aninhadas (cada linha e como
+  um filtro; grupos combinam com **E** ou **OU** e podem conter outros
+  grupos — ex: (Nota >= 5 E (Vip OU Passe)); sozinha vale como antes); com
+  condicao falsa o Avancar desabilita com o motivo.
 - Referencias entre tasks nao podem formar ciclos.
 - Referencias (`task` e `atributo`) valem entre tipos diferentes, desde que
   no mesmo projeto. Um atributo `reference_attribute` pode fixar o atributo

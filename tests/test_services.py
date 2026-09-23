@@ -538,3 +538,92 @@ def test_list_filtered_by_attributes(services):
     assert [t.title for t in high] == ["B1"]
     assert tasks.list_filtered(p.id, None, []) is not None
     assert len(tasks.list_filtered(p.id, None, [])) == 3
+
+
+def test_phase_enter_conditions_or(services):
+    """OU: basta uma condicao valer."""
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    t = task_types.create_type(
+        p.id,
+        "T",
+        phases=[
+            {"name": "Novo", "is_initial": True},
+            {
+                "name": "Rev",
+                "enter_conditions": {
+                    "logic": "OR",
+                    "rules": [
+                        {"attr": "nota", "op": "gte", "value": "5"},
+                        {"attr": "vip", "op": "is_true", "value": ""},
+                    ],
+                },
+            },
+            {"name": "Fim", "is_final": True},
+        ],
+        attributes=[
+            {"name": "nota", "label": "Nota", "type": "number"},
+            {"name": "vip", "label": "Vip", "type": "boolean"},
+        ],
+    )
+    task = tasks.create_task(p.id, t.id, "T1", values={"nota": 2})
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(task_types._db_path) as uow:
+        rev = sorted(uow.phases.list_by_task_type(t.id), key=lambda x: x.order)[1].id
+    assert tasks.transition_block(task.id, rev) is not None
+    tasks.set_attribute(task.id, "vip", True)
+    assert tasks.transition_block(task.id, rev) is None
+    tasks.move_phase(task.id, rev)
+
+
+def test_phase_enter_conditions_groups_dnf(services):
+    """(A E B) OU (C): grupos com E dentro, OU entre."""
+    projects, task_types, tasks = services
+    p = projects.create("P1")
+    t = task_types.create_type(
+        p.id,
+        "T",
+        phases=[
+            {"name": "A", "is_initial": True},
+            {
+                "name": "B",
+                "enter_conditions": {
+                    "logic": "OR",
+                    "rules": [
+                        {
+                            "logic": "AND",
+                            "rules": [
+                                {"attr": "n", "op": "gte", "value": "5"},
+                                {"attr": "v", "op": "is_true", "value": ""},
+                            ],
+                        },
+                        {"attr": "p", "op": "is_true", "value": ""},
+                    ],
+                },
+            },
+            {"name": "C", "is_final": True},
+        ],
+        attributes=[
+            {"name": "n", "label": "N", "type": "number"},
+            {"name": "v", "label": "V", "type": "boolean"},
+            {"name": "p", "label": "P", "type": "boolean"},
+        ],
+    )
+    task = tasks.create_task(p.id, t.id, "K", values={"n": 9})
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(task_types._db_path) as uow:
+        target = sorted(uow.phases.list_by_task_type(t.id), key=lambda x: x.order)[1].id
+    assert tasks.transition_block(task.id, target) is not None  # n=9 sem v, sem p
+    tasks.set_attribute(task.id, "v", True)
+    assert tasks.transition_block(task.id, target) is None  # grupo 1 completo
+    # legado AND continua funcionando
+    from task_level.services.filters import from_groups, to_groups
+
+    assert to_groups([{"attr": "n", "op": "gte", "value": "5"}]) == [
+        [{"attr": "n", "op": "gte", "value": "5"}]
+    ]
+    assert from_groups([[{"attr": "a", "op": "eq", "value": "1"}]]) == [
+        {"attr": "a", "op": "eq", "value": "1"}
+    ]
