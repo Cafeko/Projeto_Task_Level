@@ -65,8 +65,7 @@ class ProjectListView(QWidget):
             QMessageBox.critical(self, "Erro", str(e))
             return
         for p in items:
-            label = p.name if p.id is None else f"#{p.id} {p.name}"
-            item = QListWidgetItem(label)
+            item = QListWidgetItem(p.name)
             item.setData(Qt.UserRole, p.id)
             self.project_list.addItem(item)
 

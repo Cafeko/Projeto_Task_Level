@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from task_level.data import UnitOfWork
-from task_level.domain import DomainError
+from task_level.domain import DomainError, task_number
 from task_level.presentation.dialogs.task_dialog import TaskDialog
 from task_level.presentation.widgets.type_badge import normalize_color
 from task_level.services import TaskService
@@ -102,6 +102,7 @@ class KanbanBoard(QWidget):
 
         from task_level.presentation.dialogs.task_dialog import format_attr_value
 
+        ref_numbers = {t.id: task_number(t) for t in tasks if t.id is not None}
         for phase in phases:
             header = QLabel("")
             header.setStyleSheet(
@@ -129,7 +130,7 @@ class KanbanBoard(QWidget):
             items = by_phase.get(phase.id, [])
             header.setText(f"{phase.name} ({len(items)})")
             for t in items:
-                lines = [f"#{t.id} {t.title}"]
+                lines = [f"#{task_number(t)} {t.title}"]
                 for name in self._focus:
                     d = focus_defs.get(name)
                     if d is None or d.id is None:
@@ -137,7 +138,7 @@ class KanbanBoard(QWidget):
                     v = focus_vals.get((t.id, d.id))
                     if v is None:
                         continue
-                    text = format_attr_value(v, d.type)
+                    text = format_attr_value(v, d.type, ref_numbers)
                     if text:
                         lines.append(f"{d.label}: {text}")
                 item = QListWidgetItem("\n".join(lines))

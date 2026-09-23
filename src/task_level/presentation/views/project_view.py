@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from task_level.data import UnitOfWork
-from task_level.domain import DomainError, to_local
+from task_level.domain import DomainError, task_number, to_local
 from task_level.presentation.dialogs.filter_dialog import FilterDialog
 from task_level.presentation.dialogs.focus_dialog import FocusDialog
 from task_level.presentation.dialogs.history_dialog import HistoryDialog
@@ -196,7 +196,7 @@ class ProjectView(QWidget):
             QMessageBox.critical(self, "Erro", str(e))
             return
         self.project_id = project_id
-        self._title.setText(f"#{project.id} {project.name}")
+        self._title.setText(project.name)
         self._load_focus()
         self._update_focus_button()
         self._refresh_undo_buttons()
@@ -394,7 +394,9 @@ class ProjectView(QWidget):
                 vals[(t.id, v.attribute_definition_id)] = v
         return defs, vals
 
-    def _focus_parts(self, task, defs, vals) -> list[str]:
+    def _focus_parts(
+        self, task, defs, vals, ref_numbers: dict[int, int] | None = None
+    ) -> list[str]:
         """['Rotulo: valor', ...] dos atributos em foco (vazios pulados)."""
         parts = []
         for name in self._focus.get(str(task.task_type_id), []):
@@ -404,10 +406,17 @@ class ProjectView(QWidget):
             v = vals.get((task.id, d.id))
             if v is None:
                 continue
-            text = format_attr_value(v, d.type)
+            text = format_attr_value(v, d.type, ref_numbers)
             if text:
                 parts.append(f"{d.label}: {text}")
         return parts
+
+    @staticmethod
+    def _ref_numbers(tasks) -> dict[int, int]:
+        """task_id -> numero visivel (p/ exibir referencias como #seq)."""
+        return {
+            t.id: task_number(t) for t in tasks if t.id is not None
+        }
 
     def _load_recent_list(self) -> None:
         self._all_list.clear()
@@ -425,14 +434,18 @@ class ProjectView(QWidget):
                 )
             )
             focus_defs, focus_vals = self._focus_data(uow, tasks)
+        ref_numbers = self._ref_numbers(tasks)
         for t in tasks:
             task_type = types.get(t.task_type_id)
             type_name = task_type.name if task_type else "?"
             type_icon = task_type.icon if task_type else ""
             type_color = task_type.color if task_type else None
             phase_name = phases[t.phase_id].name if t.phase_id in phases else "-"
-            text = f"[{type_label(type_name, type_icon)}] #{t.id} {t.title}  ({phase_name})"
-            parts = self._focus_parts(t, focus_defs, focus_vals)
+            text = (
+                f"[{type_label(type_name, type_icon)}] #{task_number(t)}"
+                f" {t.title}  ({phase_name})"
+            )
+            parts = self._focus_parts(t, focus_defs, focus_vals, ref_numbers)
             if parts:
                 text += "  |  " + "  |  ".join(parts)
             item = QListWidgetItem(text)
@@ -464,6 +477,7 @@ class ProjectView(QWidget):
             )
             grouped = group_by_type_and_phase(tasks_all, phases)
             focus_defs, focus_vals = self._focus_data(uow, tasks_all)
+            ref_numbers = self._ref_numbers(tasks_all)
         type_order = sorted(
             grouped, key=lambda i: types[i].name if i in types else "?"
         )
@@ -520,14 +534,14 @@ class ProjectView(QWidget):
                     if hasattr(updated, "strftime")
                     else "-"
                 )
-                child_text = f"#{t.id} {t.title}"
+                child_text = f"#{task_number(t)} {t.title}"
                 cells = [child_text, phase_name, stamp]
                 for tid, d in focus_cols:
                     cell = ""
                     if tid == t.task_type_id and d.id is not None:
                         v = focus_vals.get((t.id, d.id))
                         if v is not None:
-                            cell = format_attr_value(v, d.type)
+                            cell = format_attr_value(v, d.type, ref_numbers)
                     cells.append(cell)
                 child = QTreeWidgetItem(cells)
                 child.setData(0, Qt.UserRole, t.id)

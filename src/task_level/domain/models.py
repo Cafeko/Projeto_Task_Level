@@ -193,6 +193,7 @@ class Task:
     title: str
     description: str = ""
     id: int | None = None
+    seq: int | None = None  # numero visivel: sequencial por tipo (1, 2, ...)
     created_at: datetime = field(default_factory=utcnow)
     updated_at: datetime = field(default_factory=utcnow)
     completed_at: datetime | None = None
@@ -203,6 +204,15 @@ class Task:
         if not self.task_type_id or self.task_type_id <= 0:
             raise ValidationError("task.task_type_id invalido")
         _require_non_empty(self.title, "task.title")
+
+
+def task_number(task: Task) -> int:
+    """Numero visivel da task: sequencial por tipo (fallback: id global)."""
+    if task.seq is not None:
+        return task.seq
+    if task.id is not None:
+        return task.id
+    return 0
 
 
 @dataclass

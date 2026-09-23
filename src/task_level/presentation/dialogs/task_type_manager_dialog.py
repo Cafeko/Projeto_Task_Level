@@ -65,7 +65,7 @@ class TaskTypeManagerDialog(QDialog):
             QMessageBox.critical(self, "Erro", str(e))
             return
         for t in types:
-            item = QListWidgetItem(f"#{t.id} {type_label(t.name, t.icon)}")
+            item = QListWidgetItem(type_label(t.name, t.icon))
             item.setData(Qt.UserRole, t.id)
             item.setIcon(make_color_icon(t.color))
             self._list.addItem(item)

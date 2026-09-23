@@ -32,14 +32,19 @@ from PySide6.QtWidgets import (
 )
 
 from task_level.data import UnitOfWork
-from task_level.domain import AttributeType, DomainError
+from task_level.domain import AttributeType, DomainError, task_number
 from task_level.presentation.dialogs.reference_attribute_picker import (
     ReferenceAttributePicker,
 )
 
 
-def format_attr_value(attr, attr_type: str | None = None) -> str:
-    """Texto curto do valor de um TaskAttribute (p/ exibir em combos/resumos)."""
+def format_attr_value(
+    attr, attr_type: str | None = None, ref_numbers: dict[int, int] | None = None
+) -> str:
+    """Texto curto do valor de um TaskAttribute (p/ exibir em combos/resumos).
+
+    ref_numbers: task_id -> numero visivel (p/ referencias mostrarem #seq).
+    """
     from task_level.domain import AttributeType, format_currency, format_date
 
     if attr_type == AttributeType.CURRENCY.value and attr.value_number is not None:
@@ -59,7 +64,10 @@ def format_attr_value(attr, attr_type: str | None = None) -> str:
     if attr.value_boolean is not None:
         return "sim" if attr.value_boolean else "nao"
     if attr.value_reference_task_id is not None:
-        return f"task #{attr.value_reference_task_id}"
+        number = (ref_numbers or {}).get(
+            attr.value_reference_task_id, attr.value_reference_task_id
+        )
+        return f"task #{number}"
     return "-"
 
 
@@ -441,7 +449,7 @@ class TaskDialog(QDialog):
                         if allowed_type is not None and t.task_type_id != allowed_type:
                             continue
                         tname = type_names.get(t.task_type_id, "?")
-                        w.addItem(f"[{tname}] #{t.id} {t.title}", t.id)
+                        w.addItem(f"[{tname}] #{task_number(t)} {t.title}", t.id)
                 if saved and saved.value_reference_task_id is not None:
                     idx = w.findData(saved.value_reference_task_id)
                     if idx >= 0:
@@ -597,7 +605,10 @@ class TaskDialog(QDialog):
             d = definitions.get(attr.attribute_definition_id)
             name = d.label if d else f"#{attr_id}"
             dtype = d.type if d else None
-            return f"#{task_id} {task.title} - {name} = {format_attr_value(attr, dtype)}"
+            return (
+                f"#{task_number(task)} {task.title} - {name} = "
+                f"{format_attr_value(attr, dtype)}"
+            )
 
     def _eligible_ref_tasks(self, definition) -> list[tuple[int, str]]:
         """Tasks do projeto que ja tem valor no atributo fixo (referenciaveis).
@@ -630,7 +641,11 @@ class TaskDialog(QDialog):
                 tname = type_names.get(t.task_type_id, "?")
                 shown = format_attr_value(value, target_def.type)
                 eligible.append(
-                    (t.id, f"[{tname}] #{t.id} {t.title} — {target_def.label} = {shown}")
+                    (
+                        t.id,
+                        f"[{tname}] #{task_number(t)} {t.title}"
+                        f" — {target_def.label} = {shown}",
+                    )
                 )
         return eligible
 

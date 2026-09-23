@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from task_level.data import UnitOfWork
+from task_level.domain import task_number
 
 
 class ReferenceAttributePicker(QDialog):
@@ -56,7 +57,7 @@ class ReferenceAttributePicker(QDialog):
             if t.id == self._exclude:
                 continue
             tname = type_names.get(t.task_type_id, "?")
-            self._task_combo.addItem(f"[{tname}] #{t.id} {t.title}", t.id)
+            self._task_combo.addItem(f"[{tname}] #{task_number(t)} {t.title}", t.id)
 
     def _load_attributes(self) -> None:
         self._attr_combo.clear()
@@ -72,15 +73,22 @@ class ReferenceAttributePicker(QDialog):
                 for d in uow.attribute_definitions.list_by_task_type(task.task_type_id)
             }
             values = uow.task_attributes.list_by_task(task_id)
+            ref_numbers = {
+                t.id: task_number(t)
+                for t in uow.tasks.list_by_project(self._project_id)
+                if t.id is not None
+            }
         for v in values:
             d = definitions.get(v.attribute_definition_id)
             if d is None or v.id is None:
                 continue
-            label = f"{d.label} = {self._display(v, d.type)}"
+            label = f"{d.label} = {self._display(v, d.type, ref_numbers)}"
             self._attr_combo.addItem(label, (task_id, v.id))
 
     @staticmethod
-    def _display(attr, attr_type: str | None = None) -> str:
+    def _display(
+        attr, attr_type: str | None = None, ref_numbers: dict[int, int] | None = None
+    ) -> str:
         from task_level.domain import AttributeType, format_currency, format_date
 
         if attr_type == AttributeType.CURRENCY.value and attr.value_number is not None:
@@ -100,7 +108,10 @@ class ReferenceAttributePicker(QDialog):
         if attr.value_boolean is not None:
             return "sim" if attr.value_boolean else "nao"
         if attr.value_reference_task_id is not None:
-            return f"task #{attr.value_reference_task_id}"
+            number = (ref_numbers or {}).get(
+                attr.value_reference_task_id, attr.value_reference_task_id
+            )
+            return f"task #{number}"
         return "-"
 
     def data(self) -> tuple[int, int] | None:

@@ -15,7 +15,7 @@ def conn(tmp_path):
 
 
 def test_migrate_creates_all_tables(conn):
-    assert database.migrate(conn) == [1, 2, 3, 4, 5]
+    assert database.migrate(conn) == [1, 2, 3, 4, 5, 6]
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {
         "projects",
@@ -32,10 +32,12 @@ def test_migrate_creates_all_tables(conn):
     phase_cols = [r[1] for r in conn.execute("PRAGMA table_info(phases)")]
     assert "enter_conditions" in phase_cols
     assert "activity_log" in tables
+    task_cols = [r[1] for r in conn.execute("PRAGMA table_info(tasks)")]
+    assert "seq" in task_cols
 
 
 def test_migrate_idempotent(conn):
-    assert database.migrate(conn) == [1, 2, 3, 4, 5]
+    assert database.migrate(conn) == [1, 2, 3, 4, 5, 6]
     assert database.migrate(conn) == []
 
 

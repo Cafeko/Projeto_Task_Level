@@ -18,6 +18,7 @@ from task_level.domain import (
     ValidationError,
     parse_currency,
     parse_date,
+    task_number,
     utcnow,
 )
 
@@ -183,6 +184,24 @@ class TaskService:
         text = str(raw).strip().replace("\n", " ")
         return text if len(text) <= 40 else text[:39] + "…"
 
+    def _seq_of(self, task_id: int) -> int:
+        """Numero visivel da task (seq por tipo; fallback: id global)."""
+        with UnitOfWork.open(self._db_path) as uow:
+            task = uow.tasks.get(task_id)
+        if task is None:
+            return task_id
+        return task_number(task)
+
+    def _display_value(self, def_type: str, raw: Any) -> str:
+        """_short_value com referencias mostrando o numero visivel (#seq)."""
+        if def_type == AttributeType.REFERENCE_TASK.value and isinstance(raw, int):
+            return f"#{self._seq_of(raw)}"
+        if def_type == AttributeType.REFERENCE_ATTRIBUTE.value and isinstance(
+            raw, (list, tuple)
+        ):
+            return f"#{self._seq_of(raw[0])} atributo" if raw else str(raw)
+        return self._short_value(def_type, raw)
+
     def _read_attr_raw(self, task_id: int, attr_name: str):
         """(definition, raw) atuais ou (None, None)."""
         with UnitOfWork.open(self._db_path) as uow:
@@ -233,12 +252,12 @@ class TaskService:
             t = snap["task"]
             conn.execute(
                 "INSERT INTO tasks (id, project_id, task_type_id, phase_id, title,"
-                " description, created_at, updated_at, completed_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " description, created_at, updated_at, completed_at, seq)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     t["id"], t["project_id"], t["task_type_id"], t["phase_id"],
                     t["title"], t["description"], t["created_at"], t["updated_at"],
-                    t["completed_at"],
+                    t["completed_at"], t.get("seq"),
                 ),
             )
             for a in snap.get("attrs", []):
@@ -419,7 +438,7 @@ class TaskService:
             "created",
             created.id,
             created.title,
-            f"#{created.id} {created.title} criada",
+            f"#{task_number(created)} {created.title} criada",
             label=f"criar '{created.title}'",
             undo_op={"k": "delete_task", "task": created.id},
             redo_op={"k": "restore_task", "snapshot": self._snapshot_task(created.id)},
@@ -506,13 +525,14 @@ class TaskService:
             if task is None:
                 raise NotFoundError(f"task {task_id} nao encontrada")
             project_id, title = task.project_id, task.title
+            number = task_number(task)
         snap = self._delete_with_snapshot(task_id)
         self._record(
             project_id,
             "deleted",
             None,
             title,
-            f"#{task_id} {title} excluida",
+            f"#{number} {title} excluida",
             label=f"excluir '{title}'",
             undo_op={"k": "restore_task", "snapshot": snap},
             redo_op={"k": "delete_task", "task": task_id},
@@ -548,6 +568,7 @@ class TaskService:
                 raise NotFoundError(f"task {task_id} nao encontrada")
             old = (task.title, task.description)
             project_id = task.project_id
+            number = task_number(task)
             task.title = title
             task.description = description
             task.updated_at = utcnow()
@@ -573,7 +594,7 @@ class TaskService:
                 "updated",
                 task_id,
                 title,
-                f"#{task_id} editada: " + ", ".join(details) if details else f"#{task_id} editada",
+                f"#{number} editada: " + ", ".join(details) if details else f"#{number} editada",
                 label=f"editar '{title}'",
                 undo_op={
                     "k": "set_details", "task": task_id,
@@ -601,6 +622,7 @@ class TaskService:
                 raise NotFoundError(f"atributo '{attr_name}' nao existe neste tipo")
             assert definition.id is not None
             project_id = task.project_id
+            number = task_number(task)
             existing = uow.task_attributes.get(task_id, definition.id)
             if existing is None:
                 return  # nada a fazer
@@ -609,7 +631,7 @@ class TaskService:
             if definition.type == AttributeType.FILE.value:
                 old_trash = trash_file(self._db_path, existing.value_text)
             uow.task_attributes.delete(task_id, definition.id)
-        short = self._short_value(definition.type, old_raw)
+        short = self._display_value(definition.type, old_raw)
         if definition.type == AttributeType.FILE.value:
             undo_op: dict = {
                 "k": "set_file", "task": task_id, "attr": attr_name,
@@ -627,7 +649,7 @@ class TaskService:
             "attribute",
             task_id,
             task.title,
-            f"#{task_id} '{definition.label}' removido (era {short})",
+            f"#{number} '{definition.label}' removido (era {short})",
             label=f"limpar '{definition.label}'",
             undo_op=undo_op,
             redo_op=redo_op,
@@ -656,6 +678,7 @@ class TaskService:
             old = uow.phase_notes.get(task_id, phase_id)
             old_note = old.note if old else None
             project_id, title, phase_name = task.project_id, task.title, phase.name
+            number = task_number(task)
             if not note.strip():
                 uow.phase_notes.delete(task_id, phase_id)
             else:
@@ -670,7 +693,7 @@ class TaskService:
                 "note",
                 task_id,
                 title,
-                f"#{task_id} observacao em '{phase_name}': {shown}",
+                f"#{number} observacao em '{phase_name}': {shown}",
                 label=f"observacao em '{phase_name}'",
                 undo_op={
                     "k": "set_note", "task": task_id, "phase": phase_id,
@@ -715,6 +738,7 @@ class TaskService:
             if old_path and old_path != str(dest):
                 old_trash = trash_file(self._db_path, old_path)
             project_id, title, label = task.project_id, task.title, definition.label
+            number = task_number(task)
         if old_path is None:
             undo_op: dict = {"k": "clear_file", "task": task_id, "attr": attr_name}
         else:
@@ -727,7 +751,7 @@ class TaskService:
             "attribute",
             task_id,
             title,
-            f"#{task_id} '{label}': anexo {Path(str(dest)).name}",
+            f"#{number} '{label}': anexo {Path(str(dest)).name}",
             label=f"anexar em '{label}'",
             undo_op=undo_op,
             redo_op={
@@ -760,8 +784,9 @@ class TaskService:
                 return old_row if old_row is not None else built
             saved = uow.task_attributes.set(built, definition.type)
             project_id, title = task.project_id, task.title
-        short_old = self._short_value(definition.type, old_raw)
-        short_new = self._short_value(definition.type, value)
+            number = task_number(task)
+        short_old = self._display_value(definition.type, old_raw)
+        short_new = self._display_value(definition.type, value)
         if old_raw is None:
             undo_op: dict = {"k": "clear_attr", "task": task_id, "attr": attr_name}
         else:
@@ -774,7 +799,7 @@ class TaskService:
             "attribute",
             task_id,
             title,
-            f"#{task_id} '{definition.label}': {short_old} → {short_new}",
+            f"#{number} '{definition.label}': {short_old} → {short_new}",
             label=f"editar '{definition.label}'",
             undo_op=undo_op,
             redo_op={
@@ -1093,6 +1118,7 @@ class TaskService:
             task.updated_at = utcnow()
             uow.tasks.update(task)
             project_id, title = task.project_id, task.title
+            number = task_number(task)
         if old_phase_id != phase_id:
             undo: dict | None = (
                 {"k": "move", "task": task_id, "phase": old_phase_id}
@@ -1105,7 +1131,7 @@ class TaskService:
                 "moved",
                 task_id,
                 title,
-                f"#{task_id} fase {names.get(old_phase_id, '?')} → "
+                f"#{number} fase {names.get(old_phase_id, '?')} → "
                 f"{names.get(phase_id, '?')}",
                 label=f"mover '{title}'",
                 undo_op=undo,

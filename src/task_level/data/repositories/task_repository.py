@@ -9,6 +9,7 @@ from task_level.domain import Task, from_iso, to_iso
 
 def _to_model(row: sqlite3.Row) -> Task:
     completed = row["completed_at"]
+    keys = row.keys()
     return Task(
         id=row["id"],
         project_id=row["project_id"],
@@ -16,6 +17,7 @@ def _to_model(row: sqlite3.Row) -> Task:
         phase_id=row["phase_id"],
         title=row["title"],
         description=row["description"],
+        seq=row["seq"] if "seq" in keys else None,
         created_at=from_iso(row["created_at"]),
         updated_at=from_iso(row["updated_at"]),
         completed_at=from_iso(completed) if completed else None,
@@ -26,12 +28,22 @@ class TaskRepository:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
 
+    def next_seq(self, task_type_id: int) -> int:
+        """Proximo numero visivel do tipo (estavel: excluir nao renumera)."""
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) FROM tasks WHERE task_type_id = ?",
+            (task_type_id,),
+        ).fetchone()
+        return int(row[0]) + 1
+
     def add(self, task: Task) -> Task:
         task.validate()
+        if task.seq is None:
+            task.seq = self.next_seq(task.task_type_id)
         cur = self._conn.execute(
             "INSERT INTO tasks (project_id, task_type_id, phase_id, title, description,"
-            " created_at, updated_at, completed_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " created_at, updated_at, completed_at, seq)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.project_id,
                 task.task_type_id,
@@ -41,6 +53,7 @@ class TaskRepository:
                 to_iso(task.created_at),
                 to_iso(task.updated_at),
                 to_iso(task.completed_at) if task.completed_at else None,
+                task.seq,
             ),
         )
         task.id = cur.lastrowid
