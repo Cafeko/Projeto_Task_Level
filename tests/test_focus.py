@@ -153,6 +153,66 @@ def test_focus_reference_shows_value_not_pointer(tmp_path, qapp):
         board.close()
 
 
+def test_focus_preset_apply_replaces_selection(tmp_path, qapp):
+    """Predefinicao: escolher limpa o atual e marca o definido (poda lixo)."""
+    from PySide6.QtCore import QSettings
+
+    from task_level.presentation.dialogs.focus_dialog import FocusDialog
+
+    db = tmp_path / "preset.db"
+    pid = ProjectService(db).create("P1").id
+    types = TaskTypeService(db)
+    bug = types.create_type(
+        pid,
+        "Bug",
+        attributes=[
+            {"name": "sev", "label": "Severidade", "type": "text"},
+            {"name": "amb", "label": "Ambiente", "type": "text"},
+        ],
+    )
+    feat = types.create_type(
+        pid, "Feat", attributes=[{"name": "pts", "label": "Pontos", "type": "number"}]
+    )
+    name = "XY-teste-preset"
+    dlg = FocusDialog(None, db, pid, None, {str(bug.id): ["amb"]})
+    try:
+        dlg._write_preset(
+            name,
+            {
+                str(bug.id): ["sev"],
+                str(feat.id): ["pts"],
+                "9999": ["x"],  # tipo inexistente: podado ao aplicar
+            },
+        )
+        assert name in dlg._read_presets()
+        # troca a selecao atual pela predefinicao
+        dlg._selections = {str(bug.id): {"amb"}}
+        dlg._apply_preset(name)
+        assert dlg._selections == {
+            str(bug.id): {"sev"},
+            str(feat.id): {"pts"},
+        }
+        assert dlg.data_all() == {
+            str(bug.id): ["sev"],
+            str(feat.id): ["pts"],
+        }
+        dlg._remove_preset(name)
+        assert name not in dlg._read_presets()
+    finally:
+        # limpa vestigio do QSettings real (chave por projeto)
+        try:
+            import json as _json
+
+            presets = dlg._read_presets()
+            presets.pop(name, None)
+            QSettings("TaskLevel", "task-level").setValue(
+                dlg._presets_key(), _json.dumps(presets)
+            )
+        except Exception:
+            pass
+        dlg.close()
+
+
 def test_focus_composes_with_filters(setup, qapp):
     db, pid, tid = setup
     view = ProjectView(db, on_back=lambda: None)

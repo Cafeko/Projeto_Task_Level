@@ -1,18 +1,27 @@
-"""Dialogo de Foco: escolhe quais atributos aparecem inline nas listas."""
+"""Dialogo de Foco: escolhe quais atributos aparecem inline nas listas.
+
+Predefinicoes: conjuntos nomeados salvos por projeto (ex: "Financeiro" =
+x e y). Escolher uma predefinicao limpa a selecao atual e marca o que
+foi definido; "Salvar atual..." guarda as marcacoes de agora.
+"""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
+    QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
 )
@@ -76,6 +85,26 @@ class FocusDialog(ScreenFitMixin, QDialog):
                 pending_single = None
         # lista legada no modo Todos: aplica no tipo inicial visivel
         self._pending_single = pending_single
+
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("Predefinicao:"))
+        self._preset_combo = QComboBox()
+        self._preset_combo.setMinimumWidth(140)
+        self._preset_combo.setToolTip(
+            "Escolher limpa a selecao atual e marca o que foi definido"
+        )
+        self._preset_combo.activated.connect(self._on_preset_chosen)
+        btn_save_preset = QPushButton("Salvar atual...")
+        btn_save_preset.setToolTip("Guarda as marcacoes de agora como predefinicao")
+        btn_save_preset.clicked.connect(self._save_preset)
+        btn_del_preset = QPushButton("Apagar")
+        btn_del_preset.setToolTip("Apaga a predefinicao escolhida")
+        btn_del_preset.clicked.connect(self._delete_preset)
+        preset_row.addWidget(self._preset_combo, stretch=1)
+        preset_row.addWidget(btn_save_preset)
+        preset_row.addWidget(btn_del_preset)
+        layout.addLayout(preset_row)
+        self._refresh_preset_combo()
 
         self._list = QListWidget()
         layout.addWidget(self._list)
@@ -175,6 +204,177 @@ class FocusDialog(ScreenFitMixin, QDialog):
     def _clear_all_scopes(self) -> None:
         self._selections.clear()
         self._clear_current()
+
+    # -- predefinicoes (salvas por projeto) ----------------------------------
+
+    def _presets_key(self) -> str:
+        return f"focus_presets/project_{self._project_id}"
+
+    def _read_presets(self) -> dict[str, dict[str, list[str]]]:
+        """{nome: {type_id: [attr, ...]}} validado (lixo ignorado)."""
+        try:
+            raw = QSettings("TaskLevel", "task-level").value(
+                self._presets_key(), "{}"
+            )
+            data = json.loads(raw) if isinstance(raw, str) else {}
+        except Exception:
+            return {}
+        out: dict[str, dict[str, list[str]]] = {}
+        if not isinstance(data, dict):
+            return out
+        for name, scopes in data.items():
+            if not isinstance(name, str) or not name.strip():
+                continue
+            if not isinstance(scopes, dict):
+                continue
+            clean: dict[str, list[str]] = {}
+            for tid, names in scopes.items():
+                if not isinstance(names, (list, tuple, set)):
+                    continue
+                kept = [str(n) for n in names if str(n)]
+                if kept:
+                    clean[str(tid)] = kept
+            if clean:
+                out[name.strip()] = clean
+        return out
+
+    def _write_preset(self, name: str, snapshot: dict[str, list[str]]) -> None:
+        """Guarda/atualiza uma predefinicao (sem dialogs: testavel)."""
+        presets = self._read_presets()
+        cleaned: dict[str, list[str]] = {}
+        for tid, names in snapshot.items():
+            kept = [str(n) for n in names if str(n)]
+            if kept:
+                cleaned[str(tid)] = kept
+        presets[name.strip()] = cleaned
+        QSettings("TaskLevel", "task-level").setValue(
+            self._presets_key(), json.dumps(presets)
+        )
+
+    def _remove_preset(self, name: str) -> None:
+        presets = self._read_presets()
+        if name in presets:
+            del presets[name]
+            QSettings("TaskLevel", "task-level").setValue(
+                self._presets_key(), json.dumps(presets)
+            )
+
+    def _prune_preset(
+        self, data: dict[str, list[str]]
+    ) -> dict[str, set[str]]:
+        """Mantem so tipos/atributos que ainda existem no projeto."""
+        from task_level.data import UnitOfWork
+
+        out: dict[str, set[str]] = {}
+        try:
+            with UnitOfWork.open(self._db_path) as uow:
+                types = {t.id for t in uow.task_types.list_by_project(
+                    self._project_id
+                )}
+                for raw_tid, names in data.items():
+                    try:
+                        tid = int(raw_tid)
+                    except (TypeError, ValueError):
+                        continue
+                    if tid not in types:
+                        continue
+                    valid = {
+                        d.name
+                        for d in uow.attribute_definitions.list_by_task_type(tid)
+                    }
+                    keep = {str(n) for n in names if str(n) in valid}
+                    if keep:
+                        out[str(tid)] = keep
+        except Exception:
+            return {}
+        return out
+
+    def _refresh_preset_combo(self, select: str | None = None) -> None:
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.clear()
+        self._preset_combo.addItem("(escolher...)", None)
+        for name in sorted(self._read_presets()):
+            self._preset_combo.addItem(name, name)
+        if select is not None:
+            idx = self._preset_combo.findData(select)
+            self._preset_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._preset_combo.blockSignals(False)
+
+    def _on_preset_chosen(self, index: int) -> None:
+        name = self._preset_combo.itemData(index)
+        if not name:
+            return
+        self._apply_preset(str(name))
+
+    def _apply_preset(self, name: str) -> None:
+        """Troca a selecao atual pela predefinicao (limpa e marca)."""
+        data = self._read_presets().get(name)
+        if not isinstance(data, dict):
+            return
+        clean = self._prune_preset(data)
+        if self._fixed_type is not None:
+            # No tipo fixo (Kanban) vale o escopo visivel; o resto segue
+            # como estava (o edit retorna so este tipo).
+            scope = str(self._fixed_type)
+            if scope in clean:
+                self._selections[scope] = clean[scope]
+            else:
+                self._selections.pop(scope, None)
+        else:
+            self._selections = clean
+        self._reload_attrs()
+
+    def _save_preset(self) -> None:
+        self._stash_current()
+        current = self._preset_combo.currentData()
+        initial = str(current) if current else ""
+        name, ok = QInputDialog.getText(
+            self, "Salvar predefinicao", "Nome:", text=initial
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(
+                self, "Predefinicao", "De um nome para a predefinicao."
+            )
+            return
+        snapshot = {k: sorted(v) for k, v in self._selections.items() if v}
+        if not snapshot:
+            answer = QMessageBox.question(
+                self,
+                "Predefinicao",
+                "Nada selecionado: salvar predefinicao vazia "
+                "(ao aplicar, limpa tudo)?",
+            )
+            if answer != QMessageBox.Yes:
+                return
+        presets = self._read_presets()
+        if name in presets:
+            answer = QMessageBox.question(
+                self,
+                "Predefinicao",
+                f"'{name}' ja existe. Substituir?",
+            )
+            if answer != QMessageBox.Yes:
+                return
+        self._write_preset(name, snapshot)
+        self._refresh_preset_combo(select=name)
+
+    def _delete_preset(self) -> None:
+        name = self._preset_combo.currentData()
+        if not name:
+            QMessageBox.information(
+                self, "Predefinicao", "Escolha uma predefinicao para apagar."
+            )
+            return
+        answer = QMessageBox.question(
+            self, "Predefinicao", f"Apagar '{name}'?"
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._remove_preset(str(name))
+        self._refresh_preset_combo()
 
     def accept(self) -> None:
         self._stash_current()
