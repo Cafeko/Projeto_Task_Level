@@ -168,6 +168,15 @@ class TaskDialog(QDialog):
 
         self._load_types()
         if task_id is None:
+            # Pre-seleciona o tipo da pagina (Kanban) antes do primeiro build:
+            # evita rebuild duplo (fantasma/overlap) que acontecia quando o
+            # create() trocava o combo depois do __init__ ja ter montado.
+            if task_type_id is not None:
+                self._type_combo.blockSignals(True)
+                idx = self._type_combo.findData(task_type_id)
+                if idx >= 0:
+                    self._type_combo.setCurrentIndex(idx)
+                self._type_combo.blockSignals(False)
             self._type_combo.currentIndexChanged.connect(self._rebuild_attributes)
             self._rebuild_attributes()
         else:
@@ -367,10 +376,21 @@ class TaskDialog(QDialog):
     # -- form dinamico ----------------------------------------------------------
 
     def _clear_attr_form(self) -> None:
-        while self._attr_form.count():
-            item = self._attr_form.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        # takeAt() sozinho esvazia mas mantem linhas vazias (rowCount nao cai
+        # e novas linhas sao anexadas depois) — remove por linha de verdade.
+        from PySide6.QtWidgets import QFormLayout
+        while self._attr_form.rowCount():
+            label_item = self._attr_form.itemAt(0, QFormLayout.LabelRole)
+            field_item = self._attr_form.itemAt(0, QFormLayout.FieldRole)
+            self._attr_form.removeRow(0)
+            for item in (label_item, field_item):
+                if item is None:
+                    continue
+                w = item.widget()
+                if w is not None:
+                    w.hide()
+                    w.setParent(None)
+                    w.deleteLater()
         self._fields = {}
         self._ref_fixed = {}
         self._date_edits = {}
@@ -808,11 +828,12 @@ class TaskDialog(QDialog):
         task_type_id: int | None = None,
     ) -> int | None:
         dlg = cls(parent, db_path, project_id, task_type_id=task_type_id)
-        if task_type_id is not None:
+        # Tipo ja pre-selecionado no __init__ (sem rebuild redundante).
+        # So ajusta se por algum motivo o combo nao refletiu o pedido.
+        if task_type_id is not None and dlg._type_combo.currentData() != task_type_id:
             idx = dlg._type_combo.findData(task_type_id)
             if idx >= 0:
                 dlg._type_combo.setCurrentIndex(idx)
-                dlg._rebuild_attributes()
         if not dlg.exec():
             return None
         try:
