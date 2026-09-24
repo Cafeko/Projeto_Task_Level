@@ -15,9 +15,10 @@ from PySide6.QtWidgets import (
 
 from task_level.data import UnitOfWork
 from task_level.domain import task_number
+from task_level.presentation.dialogs.screen_fit import ScreenFitMixin
 
 
-class ReferenceAttributePicker(QDialog):
+class ReferenceAttributePicker(ScreenFitMixin, QDialog):
     def __init__(
         self,
         parent: QWidget | None,
@@ -27,6 +28,8 @@ class ReferenceAttributePicker(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Referenciar atributo")
+        self.setSizeGripEnabled(True)
+        self._fit_to_screen(480, 200)
         self._db_path = db_path
         self._project_id = project_id
         self._exclude = exclude_task_id

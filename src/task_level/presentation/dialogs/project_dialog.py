@@ -14,9 +14,10 @@ from PySide6.QtWidgets import (
 )
 
 from task_level.domain import Project
+from task_level.presentation.dialogs.screen_fit import ScreenFitMixin
 
 
-class ProjectDialog(QDialog):
+class ProjectDialog(ScreenFitMixin, QDialog):
     def __init__(
         self,
         parent: QWidget | None = None,
@@ -25,6 +26,8 @@ class ProjectDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Projeto")
+        self.setSizeGripEnabled(True)
+        self._fit_to_screen(440, 300)
         self._name = QLineEdit(name)
         self._desc = QTextEdit(description)
         self._desc.setMaximumHeight(80)

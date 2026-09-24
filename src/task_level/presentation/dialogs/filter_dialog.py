@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
     QDialog,
     QDialogButtonBox,
+    QFrame,
     QHBoxLayout,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -20,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from task_level.data import UnitOfWork
 from task_level.domain import AttributeType
+from task_level.presentation.dialogs.screen_fit import ScreenFitMixin
 from task_level.services.filters import ops_for
 
 
@@ -150,7 +153,7 @@ class _FilterRow(QWidget):
             self.line.setText(value)
 
 
-class FilterDialog(QDialog):
+class FilterDialog(ScreenFitMixin, QDialog):
     def __init__(
         self,
         parent: QWidget | None,
@@ -161,7 +164,7 @@ class FilterDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Filtrar por atributos")
-        self.resize(560, 320)
+        self.setSizeGripEnabled(True)
         self._db_path = db_path
         self._project_id = project_id
         self._fixed_type = type_id
@@ -202,10 +205,20 @@ class FilterDialog(QDialog):
         row_btns.addWidget(add_btn)
         row_btns.addWidget(clear_btn)
         row_btns.addStretch()
-        layout.addLayout(self._rows_box)
+        # Linhas rolaveis: muitos filtros nao esticam o dialogo alem da tela.
+        self._rows_box.setContentsMargins(0, 0, 0, 0)
+        rows_host = QWidget()
+        rows_host.setLayout(self._rows_box)
+        rows_scroll = QScrollArea()
+        rows_scroll.setWidgetResizable(True)
+        rows_scroll.setFrameShape(QFrame.NoFrame)
+        rows_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        rows_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        rows_scroll.setWidget(rows_host)
+        layout.addWidget(rows_scroll, stretch=1)
         layout.addLayout(row_btns)
-        layout.addStretch()
         layout.addWidget(buttons)
+        self.setMinimumSize(480, 300)
 
         self._rows: list[_FilterRow] = []
         start = type_id
@@ -222,6 +235,9 @@ class FilterDialog(QDialog):
             self._type_combo.currentIndexChanged.connect(self._on_type_changed)
         self._last_scope: int | None = self._current_scope()
         self._reload_scope_from_memory()
+        # Abre na altura das linhas (pouco filtro = janela curta);
+        # muito filtro = trava no teto da tela e rola por dentro.
+        self._fit_content_to_screen(rows_scroll, 560)
 
     def _load_types(self) -> list[dict]:
         with UnitOfWork.open(self._db_path) as uow:

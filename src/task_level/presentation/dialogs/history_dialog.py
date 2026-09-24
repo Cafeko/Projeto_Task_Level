@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from task_level.data import UnitOfWork
 from task_level.domain import to_local
+from task_level.presentation.dialogs.screen_fit import ScreenFitMixin
 
 ACTION_LABELS = {
     "created": "criada",
@@ -28,13 +29,14 @@ ACTION_LABELS = {
 }
 
 
-class HistoryDialog(QDialog):
+class HistoryDialog(ScreenFitMixin, QDialog):
     def __init__(
         self, parent: QWidget | None, db_path: str | Path, project_id: int
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Historico de mudancas")
-        self.resize(620, 420)
+        self.setSizeGripEnabled(True)
+        self._fit_to_screen(620, 420)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Filtrar por task ou texto...")

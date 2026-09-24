@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QDoubleValidator, QGuiApplication
+from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -36,6 +36,7 @@ from task_level.domain import AttributeType, DomainError, task_number
 from task_level.presentation.dialogs.reference_attribute_picker import (
     ReferenceAttributePicker,
 )
+from task_level.presentation.dialogs.screen_fit import ScreenFitMixin
 
 
 def format_attr_value(
@@ -157,7 +158,7 @@ def format_attr_value_resolved(
     return format_attr_value(attr, attr_type, ref_numbers)
 
 
-class TaskDialog(QDialog):
+class TaskDialog(ScreenFitMixin, QDialog):
     def __init__(
         self,
         parent: QWidget | None,
@@ -246,10 +247,9 @@ class TaskDialog(QDialog):
         layout.addWidget(scroll, stretch=1)
         layout.addWidget(buttons)
 
-        # Com muitos atributos o conteudo e maior que a tela: a rolagem fica
-        # no conteudo e os botoes OK/Cancel permanecem fixos no rodape.
-        # O dialogo nunca abre maior que a area util da tela.
-        self._fit_to_screen()
+        # Conteudo rolavel + botoes fixos: abre na altura do conteudo
+        # (pouco atributo = janela curta); muito atributo = trava no teto
+        # da tela e rola por dentro. Nunca abre maior que a area util.
         self.setMinimumSize(420, 300)
 
         self._load_types()
@@ -267,64 +267,7 @@ class TaskDialog(QDialog):
             self._rebuild_attributes()
         else:
             self._load_existing(task_type_id)
-
-    # -- ajuste a tela ----------------------------------------------------------
-
-    def _available_geometry(self):
-        """Area util da tela onde o dialogo vai aparecer (sem taskbar)."""
-        try:
-            screen = self.screen()
-        except Exception:
-            screen = None
-        if screen is None:
-            try:
-                parent = self.parentWidget()
-                if parent is not None:
-                    screen = parent.screen()
-            except Exception:
-                screen = None
-        if screen is None:
-            try:
-                screen = QGuiApplication.primaryScreen()
-            except Exception:
-                screen = None
-        if screen is not None:
-            try:
-                return screen.availableGeometry()
-            except Exception:
-                return None
-        return None
-
-    def _fit_to_screen(self) -> None:
-        avail = self._available_geometry()
-        if avail is None:
-            self.resize(520, 620)
-            return
-        max_w = max(420, int(avail.width() * 0.95))
-        max_h = max(300, int(avail.height() * 0.92))
-        self.setMaximumSize(max_w, max_h)
-        # Tamanho inicial confortavel, mas sempre dentro da area util.
-        self.resize(min(520, max_w), min(620, max_h))
-
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        # Garante que mesmo apos construir os campos o dialogo caiba na tela:
-        # encolhe se preciso e recentraliza na area util.
-        avail = self._available_geometry()
-        if avail is None:
-            return
-        w = min(self.width(), avail.width())
-        h = min(self.height(), int(avail.height() * 0.92))
-        if (w, h) != (self.width(), self.height()):
-            self.resize(w, h)
-        # Recentraliza se estiver (parcialmente) fora da area util.
-        geom = self.frameGeometry()
-        if not avail.contains(geom):
-            geom.moveCenter(avail.center())
-            # move() respeita o window manager; garante topo visivel.
-            x = max(avail.left(), min(geom.left(), avail.right() - w))
-            y = max(avail.top(), min(geom.top(), avail.bottom() - h))
-            self.move(x, y)
+        self._fit_content_to_screen(scroll, 520)
 
     # -- carregamento ---------------------------------------------------------
 

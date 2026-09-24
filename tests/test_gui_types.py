@@ -460,6 +460,48 @@ def test_attr_order_persists_in_list_order(tmp_path, qapp):
         mgr.close()
 
 
+def test_dialogs_fit_screen_with_growing_content(qapp):
+    """Conteudo grande rola em vez de estourar a area util da tela."""
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QScrollArea
+
+    from task_level.presentation.dialogs.phase_dialog import PhaseDialog
+
+    avail = QGuiApplication.primaryScreen().availableGeometry()
+    attrs = [
+        {
+            "type_id": 1,
+            "type_name": "T",
+            "name": "nota",
+            "label": "Nota",
+            "type": "number",
+            "options": None,
+        }
+    ]
+    dlg = PhaseDialog(None, {"name": "F"}, type_attrs=attrs)
+    try:
+        group = dlg._root.add_subgroup({"logic": "OR"})
+        for i in range(30):
+            group.add_leaf(
+                {"type_id": 1, "attr": "nota", "op": "gte", "value": str(i)}
+            )
+        # comeca com o topo na metade da tela (caso real do bug)
+        dlg.move(avail.left() + 50, avail.top() + avail.height() // 2)
+        dlg.show()
+        qapp.processEvents()
+        qapp.processEvents()
+        assert dlg.height() <= avail.height()
+        # abre grande (conteudo inteiro ou teto da tela), nao minima
+        assert dlg.height() > 600
+        # inteira visivel: topo e rodape (OK/Cancel) dentro da tela
+        assert avail.contains(dlg.frameGeometry())
+        scroll = dlg.findChildren(QScrollArea)[0]
+        assert scroll.verticalScrollBar().maximum() > 0  # rola de verdade
+        assert dlg.data()["enter_conditions"] is not None
+    finally:
+        dlg.close()
+
+
 def test_phase_dialog_conditions_roundtrip(qapp):
     from task_level.presentation.dialogs.phase_dialog import PhaseDialog
 

@@ -19,18 +19,20 @@ from PySide6.QtWidgets import (
 
 from task_level.data import UnitOfWork
 from task_level.domain import DomainError
+from task_level.presentation.dialogs.screen_fit import ScreenFitMixin
 from task_level.presentation.dialogs.task_type_dialog import TaskTypeDialog
 from task_level.presentation.widgets.type_badge import make_color_icon, type_label
 from task_level.services import TaskTypeService
 
 
-class TaskTypeManagerDialog(QDialog):
+class TaskTypeManagerDialog(ScreenFitMixin, QDialog):
     def __init__(
         self, parent: QWidget | None, db_path: str | Path, project_id: int
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Tipos de tarefa")
-        self.resize(420, 360)
+        self.setSizeGripEnabled(True)
+        self._fit_to_screen(420, 360)
         self._service = TaskTypeService(db_path)
         self._db_path = db_path
         self._project_id = project_id

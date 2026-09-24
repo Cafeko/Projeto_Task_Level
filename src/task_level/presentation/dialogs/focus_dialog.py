@@ -17,8 +17,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from task_level.presentation.dialogs.screen_fit import ScreenFitMixin
 
-class FocusDialog(QDialog):
+
+class FocusDialog(ScreenFitMixin, QDialog):
     def __init__(
         self,
         parent,
@@ -31,7 +33,8 @@ class FocusDialog(QDialog):
 
         super().__init__(parent)
         self.setWindowTitle("Foco: atributos visiveis")
-        self.resize(380, 360)
+        self.setSizeGripEnabled(True)
+        self._fit_to_screen(380, 360)
         self._db_path = db_path
         self._project_id = project_id
         self._fixed_type = type_id

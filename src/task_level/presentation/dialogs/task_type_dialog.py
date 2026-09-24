@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from task_level.presentation.dialogs.attribute_dialog import AttributeDialog
 from task_level.presentation.dialogs.phase_dialog import PhaseDialog
+from task_level.presentation.dialogs.screen_fit import ScreenFitMixin
 
 
 def validate_type_payload(payload: dict) -> list[str]:
@@ -45,7 +46,7 @@ def validate_type_payload(payload: dict) -> list[str]:
     return errors
 
 
-class TaskTypeDialog(QDialog):
+class TaskTypeDialog(ScreenFitMixin, QDialog):
     def __init__(
         self,
         parent: QWidget | None = None,
@@ -54,7 +55,7 @@ class TaskTypeDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Tipo de tarefa")
-        self.resize(560, 480)
+        self.setSizeGripEnabled(True)
         payload = payload or {}
         self._ref_targets: list[dict] = [dict(t) for t in (ref_targets or [])]
 
@@ -105,6 +106,7 @@ class TaskTypeDialog(QDialog):
         self._refresh_phases()
         self._refresh_attrs()
         self._refresh_preview()
+        self._fit_to_screen(560, 480)
 
     # -- topo ---------------------------------------------------------------
 

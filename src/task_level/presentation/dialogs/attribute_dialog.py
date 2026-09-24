@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from task_level.domain import AttributeType
+from task_level.presentation.dialogs.screen_fit import ScreenFitMixin
 
 TYPE_LABELS: list[tuple[str, str]] = [
     ("Texto", AttributeType.TEXT.value),
@@ -36,7 +37,7 @@ TYPE_LABELS: list[tuple[str, str]] = [
 ]
 
 
-class AttributeDialog(QDialog):
+class AttributeDialog(ScreenFitMixin, QDialog):
     def __init__(
         self,
         parent: QWidget | None = None,
@@ -46,6 +47,8 @@ class AttributeDialog(QDialog):
         """ref_targets: [{"type_id", "type_name", "attrs": [{"name","label"}]}]."""
         super().__init__(parent)
         self.setWindowTitle("Atributo")
+        self.setSizeGripEnabled(True)
+        self._fit_to_screen(480, 420)
         spec = spec or {}
         self._ref_targets: list[dict] = [dict(t) for t in (ref_targets or [])]
         self._pending_config = (

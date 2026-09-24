@@ -2,22 +2,27 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
+
+from task_level.presentation.dialogs.screen_fit import ScreenFitMixin
 
 
 class _CondGroup(QGroupBox):
@@ -210,7 +215,7 @@ class _CondGroup(QGroupBox):
         return None
 
 
-class PhaseDialog(QDialog):
+class PhaseDialog(ScreenFitMixin, QDialog):
     """Editor de fase com condicoes aninhadas (como antes, mas com E/OU).
 
     Cada condicao e uma linha atributo/operador/valor (igual ao filtro);
@@ -228,6 +233,7 @@ class PhaseDialog(QDialog):
         """type_attrs: [{"type_id","type_name","name","label","type","options"}]."""
         super().__init__(parent)
         self.setWindowTitle("Fase")
+        self.setSizeGripEnabled(True)
         spec = spec or {}
         self._name = QLineEdit(spec.get("name", ""))
         self._desc = QTextEdit(spec.get("description", ""))
@@ -248,16 +254,21 @@ class PhaseDialog(QDialog):
         form.addRow("Nome:", self._name)
         form.addRow("Descricao:", self._desc)
         form.addRow("Cor:", btn_color)
-        layout = QVBoxLayout(self)
-        layout.addLayout(form)
 
         # -- condicoes de entrada (aninhadas, como o filtro) -----------------
+        # Conteudo rolavel: grupos aninhados crescem sem limite e o dialogo
+        # nunca passa da area util da tela; botoes ficam fixos no rodape.
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.addLayout(form)
         self._type_attrs: list[dict] = list(type_attrs or [])
-        layout.addWidget(QLabel("Condicoes para entrar (aninhaveis):"))
-        layout.addWidget(
-            QLabel("Cada linha e como antes. Use + Grupo para aninhar: "
-                   "E exige todas, OU exige uma.")
+        content_layout.addWidget(QLabel("Condicoes para entrar (aninhaveis):"))
+        hint = QLabel(
+            "Cada linha e como antes. Use + Grupo para aninhar: "
+            "E exige todas, OU exige uma."
         )
+        hint.setWordWrap(True)
+        content_layout.addWidget(hint)
         self._cond_rows: list = []  # folhas (compat: testes antigos)
 
         self._root = _CondGroup(
@@ -265,15 +276,31 @@ class PhaseDialog(QDialog):
             self._scoped_preset,
             self._cond_rows.append,
             self._forget_leaf,
-            parent=self,
+            parent=content,
             removable=False,
             logic="AND",
         )
-        layout.addWidget(self._root)
+        content_layout.addWidget(self._root)
+        content_layout.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        # Aninhar recua para a direita: sem barra horizontal o fundo cortava
+        # e nao havia como alcancar (a largura abre ate 95% da tela antes).
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setWidget(content)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(scroll, stretch=1)
         layout.addWidget(buttons)
+        self.setMinimumSize(420, 300)
 
         raw = spec.get("enter_conditions")
         self._load_raw(raw)
+        # Abre na altura do conteudo (pouca condicao = janela curta);
+        # muita condicao = trava no teto da tela e rola por dentro.
+        self._fit_content_to_screen(scroll, 560)
 
     # -- compat / helpers --------------------------------------------------
     def _forget_leaf(self, row) -> None:
