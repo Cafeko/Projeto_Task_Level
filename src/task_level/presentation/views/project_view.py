@@ -234,19 +234,54 @@ class ProjectView(QWidget):
         if self.project_id is None:
             return
         scope = self._type_filter.currentData()
-        selected = self._focus.get(str(scope), []) if scope is not None else None
-        result = FocusDialog.edit(
-            self, self._db_path, self.project_id, scope, selected
-        )
-        if result is None:
-            return
-        scope_id, names = result
-        if scope_id is None:
-            return
-        if names:
-            self._focus[str(scope_id)] = names
+        if scope is None:
+            # Modo Todos: edita todos os tipos de uma vez, ja mostrando
+            # os focos aplicados e permitindo limpar sem desmarcar um por um.
+            result = FocusDialog.edit(
+                self, self._db_path, self.project_id, None, dict(self._focus)
+            )
+            if result is None:
+                return
+            if isinstance(result, dict):
+                self._focus = {
+                    str(k): [str(n) for n in v]
+                    for k, v in result.items()
+                    if v
+                }
+            else:  # compat: (scope_id, names)
+                scope_id, names = result
+                if scope_id is None:
+                    return
+                if names:
+                    self._focus[str(scope_id)] = names
+                else:
+                    self._focus.pop(str(scope_id), None)
         else:
-            self._focus.pop(str(scope_id), None)
+            selected = self._focus.get(str(scope), [])
+            result = FocusDialog.edit(
+                self, self._db_path, self.project_id, scope, selected
+            )
+            if result is None:
+                return
+            if isinstance(result, dict):
+                # dialogo retornou tudo (quando tipos mudaram no meio):
+                # mescla preservando outros tipos ja salvos
+                for k, v in result.items():
+                    if v:
+                        self._focus[str(k)] = [str(n) for n in v]
+                    else:
+                        self._focus.pop(str(k), None)
+                # remove o escopo atual se foi limpo e nao veio no dict
+                if str(scope) not in result:
+                    self._focus.pop(str(scope), None)
+            else:
+                scope_id, names = result
+                if scope_id is None:
+                    return
+                if names:
+                    self._focus[str(scope_id)] = names
+                else:
+                    self._focus.pop(str(scope_id), None)
         self._save_focus()
         self._update_focus_button()
         self._filter_changed()
@@ -494,6 +529,9 @@ class ProjectView(QWidget):
             for tid, d in focus_cols
             for label in [d.label]
         ]
+        # setHeaderLabels sozinho nao encolhe colunas antigas (foco removido
+        # deixava a coluna fantasma); forca a contagem antes.
+        self._grouped_tree.setColumnCount(len(headers))
         self._grouped_tree.setHeaderLabels(headers)
         tree_header = self._grouped_tree.header()
         for col in range(len(headers)):

@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -167,10 +166,20 @@ class FilterDialog(QDialog):
         self._project_id = project_id
         self._fixed_type = type_id
         self._attributes: list[dict] = []
+        # Guarda filtros por tipo para nao perder outros tipos ao trocar
+        # o combo no modo Todos, nem ao editar um tipo de cada vez.
+        self._by_type: dict[int, list[dict]] = {}
+        for f in filters or []:
+            tid = f.get("type_id")
+            if isinstance(tid, int):
+                self._by_type.setdefault(tid, []).append(dict(f))
 
         self._rows_box = QVBoxLayout()
         add_btn = QPushButton("Adicionar filtro")
         add_btn.clicked.connect(lambda _=False: self._add_row())
+        clear_btn = QPushButton("Limpar filtros")
+        clear_btn.setToolTip("Remove todos os filtros aplicados")
+        clear_btn.clicked.connect(lambda _=False: self._clear_all())
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
@@ -184,25 +193,35 @@ class FilterDialog(QDialog):
             self._type_combo = QComboBox()
             for t in self._load_types():
                 self._type_combo.addItem(t["name"], t["id"])
-            self._type_combo.currentIndexChanged.connect(self._on_type_changed)
             type_form = QFormLayout()
             type_form.addRow("Tipo:", self._type_combo)
             layout.addLayout(type_form)
+        from PySide6.QtWidgets import QHBoxLayout as _HBox
+
+        row_btns = _HBox()
+        row_btns.addWidget(add_btn)
+        row_btns.addWidget(clear_btn)
+        row_btns.addStretch()
         layout.addLayout(self._rows_box)
-        layout.addWidget(add_btn)
+        layout.addLayout(row_btns)
         layout.addStretch()
         layout.addWidget(buttons)
 
         self._rows: list[_FilterRow] = []
         start = type_id
-        presets = [f for f in (filters or [])]
-        if start is None and presets:
-            start = presets[0].get("type_id")
-        if self._type_combo is not None and start is not None:
-            idx = self._type_combo.findData(start)
-            if idx >= 0:
-                self._type_combo.setCurrentIndex(idx)
-        self._reload_scope(presets)
+        if start is None and self._by_type:
+            first = (filters or [])[0]
+            start = first.get("type_id")
+        if self._type_combo is not None:
+            self._type_combo.blockSignals(True)
+            if start is not None:
+                idx = self._type_combo.findData(start)
+                if idx >= 0:
+                    self._type_combo.setCurrentIndex(idx)
+            self._type_combo.blockSignals(False)
+            self._type_combo.currentIndexChanged.connect(self._on_type_changed)
+        self._last_scope: int | None = self._current_scope()
+        self._reload_scope_from_memory()
 
     def _load_types(self) -> list[dict]:
         with UnitOfWork.open(self._db_path) as uow:
@@ -218,11 +237,31 @@ class FilterDialog(QDialog):
             return self._type_combo.currentData()
         return None
 
-    def _on_type_changed(self) -> None:
-        self._reload_scope([])
+    def _stash_current(self) -> None:
+        """Salva as linhas visiveis no _by_type do escopo anterior."""
+        scope = self._last_scope
+        if scope is None:
+            return
+        cur: list[dict] = []
+        for row in self._rows:
+            d = row.data()
+            if d is not None:
+                dd = dict(d)
+                dd["type_id"] = scope
+                cur.append(dd)
+        if cur:
+            self._by_type[scope] = cur
+        else:
+            self._by_type.pop(scope, None)
 
-    def _reload_scope(self, presets: list[dict]) -> None:
+    def _on_type_changed(self) -> None:
+        self._stash_current()
+        self._last_scope = self._current_scope()
+        self._reload_scope_from_memory()
+
+    def _reload_scope_from_memory(self) -> None:
         scope = self._current_scope()
+        self._last_scope = scope
         self._attributes = self._load_attributes(
             self._db_path, self._project_id, scope
         )
@@ -230,11 +269,22 @@ class FilterDialog(QDialog):
             self._rows_box.removeWidget(row)
             row.deleteLater()
         self._rows = []
-        scoped = [f for f in presets if f.get("type_id") == scope]
-        for f in scoped:
+        for f in self._by_type.get(scope, []) if scope is not None else []:
             self._add_row(f)
         if not self._rows:
-            self._add_row()
+            # sem filtros nesse tipo: mostra uma linha vazia p/ adicionar
+            if self._attributes:
+                self._add_row()
+
+    # Mantido p/ compat com testes antigos.
+    def _reload_scope(self, presets: list[dict]) -> None:
+        for f in presets:
+            tid = f.get("type_id")
+            if isinstance(tid, int):
+                self._by_type.setdefault(tid, [])
+                if f not in self._by_type[tid]:
+                    self._by_type[tid].append(dict(f))
+        self._reload_scope_from_memory()
 
     @staticmethod
     def _load_attributes(
@@ -267,22 +317,33 @@ class FilterDialog(QDialog):
         self._rows_box.addWidget(row)
 
     def _remove_row(self, row: _FilterRow) -> None:
-        self._rows.remove(row)
-        row.deleteLater()
+        if row in self._rows:
+            self._rows.remove(row)
+            self._rows_box.removeWidget(row)
+            row.deleteLater()
+
+    def _clear_all(self) -> None:
+        """Limpa todos os filtros (todos os tipos) sem precisar remover um por um."""
+        self._by_type.clear()
+        for row in list(self._rows):
+            self._rows_box.removeWidget(row)
+            row.deleteLater()
+        self._rows = []
+        if self._attributes:
+            self._add_row()
 
     def accept(self) -> None:
-        for row in self._rows:
-            if row.data() is None:
-                QMessageBox.warning(self, "Validacao", "Ha filtro incompleto.")
-                return
+        # Linhas incompletas (valor vazio) sao ignoradas em vez de bloquear:
+        # OK com nada preenchido = sem filtros. Isso permite limpar e permite
+        # salvar outros tipos mesmo com a linha vazia do tipo atual.
+        self._stash_current()
         super().accept()
 
     def data(self) -> list[dict]:
-        out = []
-        for row in self._rows:
-            f = row.data()
-            if f is not None:
-                out.append(f)
+        self._stash_current()
+        out: list[dict] = []
+        for lst in self._by_type.values():
+            out.extend(dict(f) for f in lst)
         return out
 
     @classmethod
