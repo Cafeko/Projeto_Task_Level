@@ -36,7 +36,11 @@ from task_level.domain import DomainError, task_number, to_local
 from task_level.presentation.dialogs.filter_dialog import FilterDialog
 from task_level.presentation.dialogs.focus_dialog import FocusDialog
 from task_level.presentation.dialogs.history_dialog import HistoryDialog
-from task_level.presentation.dialogs.task_dialog import TaskDialog, format_attr_value
+from task_level.presentation.dialogs.task_dialog import (
+    TaskDialog,
+    format_attr_value,
+    format_attr_value_resolved,
+)
 from task_level.presentation.dialogs.task_type_manager_dialog import (
     TaskTypeManagerDialog,
 )
@@ -414,7 +418,14 @@ class ProjectView(QWidget):
         self._refresh_undo_buttons()
 
     def _focus_data(self, uow, tasks):
-        """Defs focadas por tipo + valores: ({tid: {name: def}}, {(task, def): val})."""
+        """Defs + valores + textos resolvidos do foco.
+
+        Retorna ({tid: {name: def}}, {(task, def): val}, {(task, def): texto}):
+        `texts` traz o valor real das referencias (em vez de "task #N");
+        demais tipos usam format_attr_value na hora de exibir.
+        """
+        from task_level.domain import AttributeType
+
         wanted = {t.task_type_id for t in tasks if str(t.task_type_id) in self._focus}
         defs: dict = {}
         for tid in wanted:
@@ -427,10 +438,36 @@ class ProjectView(QWidget):
         for t in tasks:
             for v in uow.task_attributes.list_by_task(t.id):
                 vals[(t.id, v.attribute_definition_id)] = v
-        return defs, vals
+        ref_numbers = {t.id: task_number(t) for t in tasks if t.id is not None}
+        tasks_by_id = {t.id: t for t in tasks if t.id is not None}
+        texts: dict = {}
+        ref_types = {
+            AttributeType.REFERENCE_TASK.value,
+            AttributeType.REFERENCE_ATTRIBUTE.value,
+        }
+        for t in tasks:
+            for name in self._focus.get(str(t.task_type_id), []):
+                d = defs.get(t.task_type_id, {}).get(name)
+                if d is None or d.id is None or d.type not in ref_types:
+                    continue
+                v = vals.get((t.id, d.id))
+                if v is None:
+                    continue
+                try:
+                    texts[(t.id, d.id)] = format_attr_value_resolved(
+                        uow, v, d.type, ref_numbers, tasks_by_id
+                    )
+                except Exception:
+                    continue
+        return defs, vals, texts
 
     def _focus_parts(
-        self, task, defs, vals, ref_numbers: dict[int, int] | None = None
+        self,
+        task,
+        defs,
+        vals,
+        ref_numbers: dict[int, int] | None = None,
+        texts: dict | None = None,
     ) -> list[str]:
         """['Rotulo: valor', ...] dos atributos em foco (vazios pulados)."""
         parts = []
@@ -441,7 +478,10 @@ class ProjectView(QWidget):
             v = vals.get((task.id, d.id))
             if v is None:
                 continue
-            text = format_attr_value(v, d.type, ref_numbers)
+            if texts is not None and (task.id, d.id) in texts:
+                text = texts[(task.id, d.id)]
+            else:
+                text = format_attr_value(v, d.type, ref_numbers)
             if text:
                 parts.append(f"{d.label}: {text}")
         return parts
@@ -468,7 +508,7 @@ class ProjectView(QWidget):
                     self.project_id, None, self._filters
                 )
             )
-            focus_defs, focus_vals = self._focus_data(uow, tasks)
+            focus_defs, focus_vals, focus_texts = self._focus_data(uow, tasks)
         ref_numbers = self._ref_numbers(tasks)
         for t in tasks:
             task_type = types.get(t.task_type_id)
@@ -480,7 +520,9 @@ class ProjectView(QWidget):
                 f"[{type_label(type_name, type_icon)}] #{task_number(t)}"
                 f" {t.title}  ({phase_name})"
             )
-            parts = self._focus_parts(t, focus_defs, focus_vals, ref_numbers)
+            parts = self._focus_parts(
+                t, focus_defs, focus_vals, ref_numbers, focus_texts
+            )
             if parts:
                 text += "  |  " + "  |  ".join(parts)
             item = QListWidgetItem(text)
@@ -511,7 +553,7 @@ class ProjectView(QWidget):
                 self.project_id, None, self._filters
             )
             grouped = group_by_type_and_phase(tasks_all, phases)
-            focus_defs, focus_vals = self._focus_data(uow, tasks_all)
+            focus_defs, focus_vals, focus_texts = self._focus_data(uow, tasks_all)
             ref_numbers = self._ref_numbers(tasks_all)
         # Ordem customizada dos tipos (gerenciador); fallback alfabetico.
         order_index = {tid: pos for pos, tid in enumerate(types)}
@@ -583,9 +625,12 @@ class ProjectView(QWidget):
                 for tid, d in focus_cols:
                     cell = ""
                     if tid == t.task_type_id and d.id is not None:
-                        v = focus_vals.get((t.id, d.id))
-                        if v is not None:
-                            cell = format_attr_value(v, d.type, ref_numbers)
+                        if (t.id, d.id) in focus_texts:
+                            cell = focus_texts[(t.id, d.id)]
+                        else:
+                            v = focus_vals.get((t.id, d.id))
+                            if v is not None:
+                                cell = format_attr_value(v, d.type, ref_numbers)
                     cells.append(cell)
                 child = QTreeWidgetItem(cells)
                 child.setData(0, Qt.UserRole, t.id)

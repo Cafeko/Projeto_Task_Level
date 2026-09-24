@@ -71,6 +71,92 @@ def format_attr_value(
     return "-"
 
 
+def format_attr_value_resolved(
+    uow,
+    attr,
+    attr_type: str | None = None,
+    ref_numbers: dict[int, int] | None = None,
+    tasks_by_id: dict | None = None,
+    _depth: int = 0,
+) -> str:
+    """Como format_attr_value, mas referencia mostra o VALOR, nao o ponteiro.
+
+    - reference_task -> "#N Titulo" da task alvo (em vez de "task #N").
+    - reference_attribute -> valor formatado do atributo alvo
+      (ex: "R$ 100,00", "critica") em vez de "task #N".
+    - demais tipos -> format_attr_value normal.
+    - alvo ausente/excluido -> fallback para o formato antigo ("task #N")
+      ou "" se nem a referencia existir.
+    """
+    from task_level.domain import AttributeType, task_number
+
+    if _depth > 3:
+        return format_attr_value(attr, attr_type, ref_numbers)
+    if attr_type == AttributeType.REFERENCE_TASK.value:
+        tid = attr.value_reference_task_id
+        if tid is None:
+            return ""
+        target = (tasks_by_id or {}).get(tid) if tasks_by_id else None
+        if target is None and uow is not None:
+            try:
+                target = uow.tasks.get(tid)
+            except Exception:
+                target = None
+        if target is None:
+            number = (ref_numbers or {}).get(tid, tid)
+            return f"task #{number}"
+        number = task_number(target)
+        title = (target.title or "").strip()
+        text = f"#{number} {title}".strip()
+        return text if len(text) <= 40 else text[:39] + "…"
+    if attr_type == AttributeType.REFERENCE_ATTRIBUTE.value:
+        aid = attr.value_reference_attribute_id
+        tid = attr.value_reference_task_id
+        if aid is None:
+            # sem atributo alvo (dado antigo?): mostra a task como fallback
+            if tid is None:
+                return ""
+            return format_attr_value_resolved(
+                uow,
+                type("R", (), {"value_reference_task_id": tid})(),
+                AttributeType.REFERENCE_TASK.value,
+                ref_numbers,
+                tasks_by_id,
+                _depth + 1,
+            )
+        target_attr = None
+        if uow is not None:
+            try:
+                target_attr = uow.task_attributes.get_by_id(aid)
+            except Exception:
+                target_attr = None
+        if target_attr is None:
+            if tid is None:
+                return ""
+            number = (ref_numbers or {}).get(tid, tid)
+            return f"task #{number}"
+        target_def = None
+        if uow is not None:
+            try:
+                target_def = uow.attribute_definitions.get(
+                    target_attr.attribute_definition_id
+                )
+            except Exception:
+                target_def = None
+        target_type = target_def.type if target_def is not None else None
+        text = format_attr_value_resolved(
+            uow, target_attr, target_type, ref_numbers, tasks_by_id, _depth + 1
+        )
+        # alvo vazio: nao esconde a referencia, mostra o ponteiro como fallback
+        if not text or text == "-":
+            if tid is not None:
+                number = (ref_numbers or {}).get(tid, tid)
+                return f"task #{number}"
+            return ""
+        return text
+    return format_attr_value(attr, attr_type, ref_numbers)
+
+
 class TaskDialog(QDialog):
     def __init__(
         self,

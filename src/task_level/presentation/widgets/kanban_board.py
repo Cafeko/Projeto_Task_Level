@@ -80,6 +80,11 @@ class KanbanBoard(QWidget):
                 _clear_layout(item.layout())
         self._columns = []
 
+        from task_level.presentation.dialogs.task_dialog import (
+            format_attr_value,
+            format_attr_value_resolved,
+        )
+
         with UnitOfWork.open(self._db_path) as uow:
             phases = uow.phases.list_by_task_type(self._task_type_id)
             focus_defs = {
@@ -96,13 +101,29 @@ class KanbanBoard(QWidget):
             for t in tasks:
                 for v in uow.task_attributes.list_by_task(t.id):
                     focus_vals[(t.id, v.attribute_definition_id)] = v
+            # Textos resolvidos das referencias (valor real, nao "task #N").
+            ref_numbers = {t.id: task_number(t) for t in tasks if t.id is not None}
+            tasks_by_id = {t.id: t for t in tasks if t.id is not None}
+            focus_texts: dict = {}
+            for t in tasks:
+                for name in self._focus:
+                    d = focus_defs.get(name)
+                    if d is None or d.id is None:
+                        continue
+                    if d.type not in ("reference_task", "reference_attribute"):
+                        continue
+                    v = focus_vals.get((t.id, d.id))
+                    if v is None:
+                        continue
+                    try:
+                        focus_texts[(t.id, d.id)] = format_attr_value_resolved(
+                            uow, v, d.type, ref_numbers, tasks_by_id
+                        )
+                    except Exception:
+                        continue
         by_phase: dict[int | None, list] = {}
         for t in tasks:
             by_phase.setdefault(t.phase_id, []).append(t)
-
-        from task_level.presentation.dialogs.task_dialog import format_attr_value
-
-        ref_numbers = {t.id: task_number(t) for t in tasks if t.id is not None}
         for phase in phases:
             header = QLabel("")
             header.setStyleSheet(
@@ -135,10 +156,13 @@ class KanbanBoard(QWidget):
                     d = focus_defs.get(name)
                     if d is None or d.id is None:
                         continue
-                    v = focus_vals.get((t.id, d.id))
-                    if v is None:
-                        continue
-                    text = format_attr_value(v, d.type, ref_numbers)
+                    if (t.id, d.id) in focus_texts:
+                        text = focus_texts[(t.id, d.id)]
+                    else:
+                        v = focus_vals.get((t.id, d.id))
+                        if v is None:
+                            continue
+                        text = format_attr_value(v, d.type, ref_numbers)
                     if text:
                         lines.append(f"{d.label}: {text}")
                 item = QListWidgetItem("\n".join(lines))

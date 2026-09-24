@@ -100,6 +100,59 @@ def test_kanban_cards_show_focus(setup, qapp):
         board.close()
 
 
+def test_focus_reference_shows_value_not_pointer(tmp_path, qapp):
+    """Foco em referencia mostra o valor (#N Titulo / atributo alvo)."""
+    db = tmp_path / "ref.db"
+    pid = ProjectService(db).create("P1").id
+    types = TaskTypeService(db)
+    bug = types.create_type(
+        pid, "Bug", attributes=[{"name": "sev", "label": "Severidade", "type": "text"}]
+    )
+    feat = types.create_type(
+        pid,
+        "Feature",
+        attributes=[
+            {"name": "bloq", "label": "Bloqueado por", "type": "reference_task"},
+            {
+                "name": "orig",
+                "label": "Sev origem",
+                "type": "reference_attribute",
+                "reference_config": {"attribute_name": "sev"},
+            },
+        ],
+    )
+    svc = TaskService(db)
+    b1 = svc.create_task(pid, bug.id, "Crash critico", values={"sev": "critica"})
+    from task_level.data import UnitOfWork
+
+    with UnitOfWork.open(db) as uow:
+        sev_def = uow.attribute_definitions.get_by_name(bug.id, "sev")
+        sev_attr = uow.task_attributes.get(b1.id, sev_def.id)
+    svc.create_task(
+        pid, feat.id, "F1", values={"bloq": b1.id, "orig": (b1.id, sev_attr.id)}
+    )
+    view = ProjectView(db, on_back=lambda: None)
+    try:
+        view.set_project(pid)
+        view._focus = {str(feat.id): ["bloq", "orig"]}
+        idx = view._view_mode.findData("recent")
+        view._view_mode.setCurrentIndex(idx)
+        texts = [view._all_list.item(i).text() for i in range(view._all_list.count())]
+        feat_text = next(t for t in texts if "F1" in t)
+        assert "Bloqueado por: #1 Crash critico" in feat_text
+        assert "Sev origem: critica" in feat_text
+        assert "task #1" not in feat_text.split("Bloqueado por:")[1].split("|")[0]
+    finally:
+        view.close()
+    board = KanbanBoard(db, pid, feat.id, focus=["bloq", "orig"])
+    try:
+        _, _, lst = board._columns[0]
+        assert "Bloqueado por: #1 Crash critico" in lst.item(0).text()
+        assert "Sev origem: critica" in lst.item(0).text()
+    finally:
+        board.close()
+
+
 def test_focus_composes_with_filters(setup, qapp):
     db, pid, tid = setup
     view = ProjectView(db, on_back=lambda: None)
