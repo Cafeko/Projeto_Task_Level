@@ -11,10 +11,15 @@ uv sync --group dev   # instala dependencias (+ dev)
 uv run task-level                 # abre a GUI (banco em ~/.task_level/task_level.db)
 uv run task-level --seed          # abre com projeto demo
 uv run task-level --db ./meu.db  # banco alternativo
-python main.py                    # duplo-clique / de qualquer pasta (usa o .venv)
 uv run pytest                     # testes
 uv run ruff check src tests       # lint
 ```
+
+## Abrir sem janela de console (Windows)
+- Duplo-clique no **`task-level.vbs`** (nenhuma janela extra) ou no
+  **`main.pyw`** / **`task-level.bat`** (via `pythonw`, sem prompt).
+- Com console (erros visiveis, diagnostico): `task-level-debug.bat`
+  ou `python main.py` no terminal.
 
 ## Dados e backup
 - Banco padrao: `~/.task_level/task_level.db`
