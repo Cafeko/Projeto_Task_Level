@@ -15,6 +15,8 @@ from pathlib import Path
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
     QComboBox,
     QHBoxLayout,
     QHeaderView,
@@ -164,11 +166,21 @@ class ProjectView(QWidget):
         self._all_list.itemDoubleClicked.connect(self._open_from_list)
         self._all_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self._all_list.customContextMenuRequested.connect(self._menu_from_list)
+        self._all_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._grouped_tree = QTreeWidget()
         self._grouped_tree.setHeaderLabels(["Task", "Fase", "Atualizada"])
         self._grouped_tree.itemDoubleClicked.connect(self._open_from_tree)
         self._grouped_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._grouped_tree.customContextMenuRequested.connect(self._menu_from_tree)
+        # Copia valores: Shift/Ctrl+clique seleciona linhas e/ou celulas.
+        self._grouped_tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self._grouped_tree.setSelectionBehavior(QAbstractItemView.SelectItems)
+        sc_copy_list = QShortcut(QKeySequence.StandardKey.Copy, self._all_list)
+        sc_copy_list.setContext(Qt.WidgetShortcut)
+        sc_copy_list.activated.connect(self._copy_list_selection)
+        sc_copy_tree = QShortcut(QKeySequence.StandardKey.Copy, self._grouped_tree)
+        sc_copy_tree.setContext(Qt.WidgetShortcut)
+        sc_copy_tree.activated.connect(self._copy_tree_selection)
         # coluna parte do tamanho do conteudo, mas o usuario pode arrastar
         tree_header = self._grouped_tree.header()
         tree_header.setSectionResizeMode(0, QHeaderView.Interactive)
@@ -655,30 +667,101 @@ class ProjectView(QWidget):
 
     def _menu_from_list(self, pos) -> None:
         item = self._all_list.itemAt(pos)
+        global_pos = self._all_list.viewport().mapToGlobal(pos)
         if item is None:
+            if self._all_list.selectedItems():
+                self._list_copy_menu(global_pos)
             return
         self._all_list.setCurrentItem(item)
-        self._task_menu(item.data(Qt.UserRole), self._all_list.viewport().mapToGlobal(pos))
+        self._task_menu(item.data(Qt.UserRole), global_pos)
 
     def _menu_from_tree(self, pos) -> None:
         item = self._grouped_tree.itemAt(pos)
+        global_pos = self._grouped_tree.viewport().mapToGlobal(pos)
         if item is None:
+            if self._grouped_tree.selectedIndexes():
+                self._tree_copy_menu(global_pos)
             return
         task_id = item.data(0, Qt.UserRole)
-        if task_id is None:  # cabecalho do tipo: sem menu
+        if task_id is None:  # cabecalho do tipo: so copiar
+            if self._grouped_tree.selectedIndexes():
+                self._tree_copy_menu(global_pos)
             return
         self._grouped_tree.setCurrentItem(item)
-        self._task_menu(task_id, self._grouped_tree.viewport().mapToGlobal(pos))
+        self._task_menu(task_id, global_pos)
 
     def _task_menu(self, task_id: int, global_pos) -> None:
         menu = QMenu(self)
         act_open = menu.addAction("Abrir")
         act_delete = menu.addAction("Excluir")
+        act_copy = menu.addAction("Copiar selecionado (Ctrl+C)")
         chosen = menu.exec(global_pos)
         if chosen == act_open:
             self._open_task_id(task_id)
         elif chosen == act_delete:
             self._delete_task_id(task_id)
+        elif chosen == act_copy:
+            if self._stack.currentWidget() is self._all_stack:
+                if self._all_stack.currentWidget() is self._grouped_tree:
+                    self._copy_tree_selection()
+                else:
+                    self._copy_list_selection()
+            else:
+                self._copy_tree_selection()
+
+    def _tree_copy_menu(self, global_pos) -> None:
+        menu = QMenu(self)
+        act_copy = menu.addAction("Copiar selecionado (Ctrl+C)")
+        if menu.exec(global_pos) == act_copy:
+            self._copy_tree_selection()
+
+    def _list_copy_menu(self, global_pos) -> None:
+        menu = QMenu(self)
+        act_copy = menu.addAction("Copiar selecionado (Ctrl+C)")
+        if menu.exec(global_pos) == act_copy:
+            self._copy_list_selection()
+
+    @staticmethod
+    def _tree_selection_text(tree: QTreeWidget) -> str:
+        """Selecionados em TSV (cola direto no Excel/Sheets)."""
+        indexes = tree.selectedIndexes()
+        if not indexes:
+            return ""
+
+        def _key(idx):
+            parent = idx.parent()
+            if parent.isValid():
+                return (parent.row(), idx.row(), idx.column())
+            return (idx.row(), -1, idx.column())
+
+        rows: dict[tuple[int, int], dict[int, str]] = {}
+        for idx in sorted(indexes, key=_key):
+            parent = idx.parent()
+            key = (parent.row(), idx.row()) if parent.isValid() else (idx.row(), -1)
+            data = idx.data(Qt.DisplayRole)
+            rows.setdefault(key, {})[idx.column()] = "" if data is None else str(data)
+        lines = []
+        for key in sorted(rows):
+            cols = rows[key]
+            lines.append("\t".join(cols[c] for c in sorted(cols)))
+        return "\n".join(lines)
+
+    def _copy_tree_selection(self) -> bool:
+        text = self._tree_selection_text(self._grouped_tree)
+        if not text:
+            return False
+        QApplication.clipboard().setText(text)
+        return True
+
+    def _copy_list_selection(self) -> bool:
+        items = self._all_list.selectedItems()
+        if not items:
+            return False
+        rows = {self._all_list.row(i): i.text() for i in items}
+        QApplication.clipboard().setText(
+            "\n".join(text for _, text in sorted(rows.items()))
+        )
+        return True
 
     def _open_task_id(self, task_id: int) -> None:
         if self.project_id is None:

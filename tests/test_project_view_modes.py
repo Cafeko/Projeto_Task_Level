@@ -95,6 +95,56 @@ def test_project_view_todos_alterna_modos(tmp_path, qapp):
         view.close()
 
 
+def test_grouped_tree_copy_selection_tsv(tmp_path, qapp):
+    """Shift/Ctrl+clique + Ctrl+C copia celulas em TSV (cola no Excel)."""
+    from PySide6.QtCore import QItemSelectionModel
+    from PySide6.QtWidgets import QApplication
+
+    from task_level.presentation.views.project_view import ProjectView
+    from task_level.services import ProjectService, TaskService, TaskTypeService
+
+    db = tmp_path / "copy.db"
+    pid = ProjectService(db).create("P1").id
+    tid = TaskTypeService(db).create_type(
+        pid, "Bug", attributes=[{"name": "sev", "label": "Severidade", "type": "text"}]
+    ).id
+    TaskService(db).create_task(pid, tid, "B1", values={"sev": "alta"})
+    TaskService(db).create_task(pid, tid, "B2", values={"sev": "baixa"})
+
+    view = ProjectView(db, on_back=lambda: None)
+    try:
+        view.set_project(pid)
+        view._focus = {str(tid): ["sev"]}
+        view._load_all()
+        tree = view._grouped_tree
+        assert tree.columnCount() == 4
+        top = tree.topLevelItem(0)
+        top.setExpanded(True)
+        sm = tree.selectionModel()
+        sm.select(
+            tree.indexFromItem(top.child(0), 0), QItemSelectionModel.Select
+        )
+        sm.select(
+            tree.indexFromItem(top.child(0), 3), QItemSelectionModel.Select
+        )
+        sm.select(
+            tree.indexFromItem(top.child(1), 0), QItemSelectionModel.Select
+        )
+        sm.select(
+            tree.indexFromItem(top.child(1), 3), QItemSelectionModel.Select
+        )
+        assert view._copy_tree_selection() is True
+        text = QApplication.clipboard().text()
+        rows = text.split("\n")
+        assert len(rows) == 2
+        assert all("\t" in r for r in rows)
+        assert "B1" in text and "B2" in text
+        tree.clearSelection()
+        assert view._copy_tree_selection() is False
+    finally:
+        view.close()
+
+
 def test_reload_types_keeps_selected_filter(tmp_path, qapp):
     """Gerenciar tipos nao deve derrubar o filtro: continua vendo as tasks."""
     from task_level.presentation.views.project_view import ProjectView
