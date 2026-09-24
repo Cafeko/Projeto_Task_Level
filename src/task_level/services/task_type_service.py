@@ -38,6 +38,8 @@ class TaskTypeService:
         with UnitOfWork.open(self._db_path) as uow:
             if uow.projects.get(project_id) is None:
                 raise NotFoundError(f"project {project_id} nao encontrado")
+            current_max = uow.task_types.max_order(project_id)
+            next_order = (current_max + 1) if current_max is not None else 0
             task_type = uow.task_types.add(
                 TaskType(
                     project_id=project_id,
@@ -45,6 +47,7 @@ class TaskTypeService:
                     description=description,
                     color=color,
                     icon=icon,
+                    order=next_order,
                 )
             )
             assert task_type.id is not None
@@ -318,6 +321,36 @@ class TaskTypeService:
             options=options,
             order=int(spec.get("order", 0)),
         )
+
+    def reorder_types(self, project_id: int, ordered_ids: list[int]) -> None:
+        """Persiste a ordem visual dos tipos (posicao na lista = ordem).
+
+        Valida que todos os ids pertencem ao projeto e que nenhum tipo do
+        projeto ficou de fora (evita perda silenciosa).
+        """
+        with UnitOfWork.open(self._db_path) as uow:
+            current = uow.task_types.list_by_project(project_id)
+            current_ids = {t.id for t in current if t.id is not None}
+            wanted = list(ordered_ids)
+            if set(wanted) != current_ids or len(wanted) != len(current_ids):
+                raise ValidationError("reordenacao invalida: ids nao conferem")
+            for pos, tid in enumerate(wanted):
+                uow.task_types.set_order(tid, pos)
+
+    def move_type(self, project_id: int, type_id: int, delta: int) -> list[int]:
+        """Move um tipo delta posicoes; retorna a nova ordem de ids."""
+        with UnitOfWork.open(self._db_path) as uow:
+            current = uow.task_types.list_by_project(project_id)
+            ids = [t.id for t in current if t.id is not None]
+        if type_id not in ids:
+            raise NotFoundError(f"task_type {type_id} nao encontrado")
+        pos = ids.index(type_id)
+        new_pos = max(0, min(len(ids) - 1, pos + delta))
+        if new_pos == pos:
+            return ids
+        ids.insert(new_pos, ids.pop(pos))
+        self.reorder_types(project_id, ids)
+        return ids
 
     def delete(self, type_id: int) -> None:
         with UnitOfWork.open(self._db_path) as uow:

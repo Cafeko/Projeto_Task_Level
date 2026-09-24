@@ -37,6 +37,13 @@ class TaskTypeManagerDialog(QDialog):
 
         self._list = QListWidget()
         self._list.itemDoubleClicked.connect(self._edit)
+        # Reordenar por arrasto: desligado por padrao (evita troca por engano,
+        # mesmo padrao das fases/atributos).
+        from PySide6.QtWidgets import QAbstractItemView
+
+        self._list.setDragDropMode(QAbstractItemView.InternalMove)
+        self._list.setDefaultDropAction(Qt.MoveAction)
+        self._list.model().rowsMoved.connect(self._types_dropped)
 
         btn_new = QPushButton("Novo")
         btn_edit = QPushButton("Editar")
@@ -51,24 +58,96 @@ class TaskTypeManagerDialog(QDialog):
         for b in (btn_new, btn_edit, btn_delete, btn_close):
             row.addWidget(b)
 
+        btn_up = QPushButton("↑ Subir")
+        btn_up.setToolTip("Move o tipo selecionado uma posicao para cima")
+        btn_up.clicked.connect(lambda: self._move_selected(-1))
+        btn_down = QPushButton("↓ Descer")
+        btn_down.setToolTip("Move o tipo selecionado uma posicao para baixo")
+        btn_down.clicked.connect(lambda: self._move_selected(+1))
+        self._drag_toggle = QPushButton()
+        self._drag_toggle.setCheckable(True)
+        self._drag_toggle.setChecked(False)
+        self._drag_toggle.toggled.connect(self._set_drag_enabled)
+
+        order_row = QHBoxLayout()
+        order_row.addWidget(btn_up)
+        order_row.addWidget(btn_down)
+        order_row.addWidget(self._drag_toggle)
+        order_row.addStretch()
+
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Tipos deste projeto:"))
         layout.addWidget(self._list)
+        layout.addLayout(order_row)
         layout.addLayout(row)
+        self._drag_hint = QLabel("")
+        self._drag_hint.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(self._drag_hint)
+        self._set_drag_enabled(False)
         self.refresh()
 
-    def refresh(self) -> None:
+    def _set_drag_enabled(self, enabled: bool) -> None:
+        self._list.setDragEnabled(enabled)
+        self._list.setAcceptDrops(enabled)
+        self._drag_toggle.setText(
+            "🔓 Reordenar: ligado" if enabled else "🔒 Reordenar: desligado"
+        )
+        self._drag_hint.setText(
+            "Arraste os tipos para reordenar (vale no Todos e nos combos)."
+            if enabled
+            else "A ordem aqui vale no Todos e nos combos. Ligue Reordenar para arrastar."
+        )
+
+    def refresh(self, keep_selected: int | None = None) -> None:
+        selected = keep_selected if keep_selected is not None else self._selected_id()
+        self._list.blockSignals(True)
         self._list.clear()
         try:
             types = self._service.list_by_project(self._project_id)
         except DomainError as e:
             QMessageBox.critical(self, "Erro", str(e))
+            self._list.blockSignals(False)
             return
-        for t in types:
-            item = QListWidgetItem(type_label(t.name, t.icon))
+        for pos, t in enumerate(types):
+            item = QListWidgetItem(f"{pos + 1}. {type_label(t.name, t.icon)}")
             item.setData(Qt.UserRole, t.id)
             item.setIcon(make_color_icon(t.color))
             self._list.addItem(item)
+            if t.id == selected:
+                self._list.setCurrentRow(pos)
+        self._list.blockSignals(False)
+
+    def _visual_ids(self) -> list[int]:
+        ids = []
+        for row in range(self._list.count()):
+            tid = self._list.item(row).data(Qt.UserRole)
+            if isinstance(tid, int):
+                ids.append(tid)
+        return ids
+
+    def _persist_visual_order(self) -> None:
+        try:
+            self._service.reorder_types(self._project_id, self._visual_ids())
+        except DomainError as e:
+            QMessageBox.critical(self, "Erro", str(e))
+            self.refresh()
+            return
+        self.refresh(keep_selected=self._selected_id())
+
+    def _types_dropped(self, *_args) -> None:
+        """Apos arrastar: a ordem passa a ser a posicao na lista."""
+        self._persist_visual_order()
+
+    def _move_selected(self, delta: int) -> None:
+        type_id = self._selected_id()
+        if type_id is None:
+            return
+        try:
+            self._service.move_type(self._project_id, type_id, delta)
+        except DomainError as e:
+            QMessageBox.critical(self, "Erro", str(e))
+            return
+        self.refresh(keep_selected=type_id)
 
     def _selected_id(self) -> int | None:
         item = self._list.currentItem()

@@ -207,6 +207,6 @@ def test_type_manager_sem_id(tmp_path, qapp):
     TaskTypeService(db).create_type(pid, "Bug", icon="🐞")
     dlg = TaskTypeManagerDialog(None, db, pid)
     try:
-        assert dlg._list.item(0).text() == "🐞 Bug"
+        assert dlg._list.item(0).text() == "1. 🐞 Bug"
     finally:
         dlg.close()

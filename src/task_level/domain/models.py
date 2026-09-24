@@ -118,6 +118,7 @@ class TaskType:
     description: str = ""
     color: str = "#888888"
     icon: str = ""
+    order: int = 0
     id: int | None = None
     created_at: datetime = field(default_factory=utcnow)
 

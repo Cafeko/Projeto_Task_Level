@@ -81,6 +81,7 @@ def export_project_json(db_path: str | Path, project_id: int) -> dict[str, Any]:
                     "description": t.description,
                     "color": t.color,
                     "icon": t.icon,
+                    "order": t.order,
                     "phases": [
                         {k: p[k] for k in ("name", "description", "color", "order",
                                           "is_initial", "is_final", "enter_conditions")

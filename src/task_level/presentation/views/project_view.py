@@ -513,8 +513,14 @@ class ProjectView(QWidget):
             grouped = group_by_type_and_phase(tasks_all, phases)
             focus_defs, focus_vals = self._focus_data(uow, tasks_all)
             ref_numbers = self._ref_numbers(tasks_all)
+        # Ordem customizada dos tipos (gerenciador); fallback alfabetico.
+        order_index = {tid: pos for pos, tid in enumerate(types)}
         type_order = sorted(
-            grouped, key=lambda i: types[i].name if i in types else "?"
+            grouped,
+            key=lambda i: (
+                order_index.get(i, 10**9),
+                types[i].name if i in types else "?",
+            ),
         )
         # colunas extras = atributos em foco (por tipo, na ordem das definicoes)
         focus_cols: list = []
