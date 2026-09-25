@@ -145,6 +145,51 @@ def test_grouped_tree_copy_selection_tsv(tmp_path, qapp):
         view.close()
 
 
+def test_hide_final_tasks_checkbox(tmp_path, qapp):
+    """Ocultar finalizadas: esconde e revela (Todos + Kanban)."""
+    from task_level.data import UnitOfWork
+    from task_level.presentation.views.project_view import ProjectView
+    from task_level.presentation.widgets.kanban_board import KanbanBoard
+    from task_level.services import ProjectService, TaskService, TaskTypeService
+
+    db = tmp_path / "hide.db"
+    pid = ProjectService(db).create("P1").id
+    tid = TaskTypeService(db).create_type(pid, "Bug").id
+    svc = TaskService(db)
+    svc.create_task(pid, tid, "Aberta")
+    done = svc.create_task(pid, tid, "Fechada")
+    phases = sorted(
+        UnitOfWork.open(db).phases.list_by_task_type(tid), key=lambda p: p.order
+    )
+    svc.move_phase(done.id, phases[1].id)
+    svc.move_phase(done.id, phases[2].id)
+    assert phases[2].is_final
+
+    view = ProjectView(db, on_back=lambda: None)
+    try:
+        view.set_project(pid)
+        assert view._grouped_tree.topLevelItem(0).childCount() == 2
+        view._chk_hide_final.setChecked(True)
+        assert view._grouped_tree.topLevelItem(0).childCount() == 1
+        idx = view._view_mode.findData(VIEW_RECENT)
+        view._view_mode.setCurrentIndex(idx)
+        assert view._all_list.count() == 1
+        view._chk_hide_final.setChecked(False)
+        assert view._all_list.count() == 2
+    finally:
+        view.close()
+    hidden = KanbanBoard(db, pid, tid, hide_final=True)
+    try:
+        assert sum(lst.count() for _, _, lst in hidden._columns) == 1
+    finally:
+        hidden.close()
+    shown = KanbanBoard(db, pid, tid)
+    try:
+        assert sum(lst.count() for _, _, lst in shown._columns) == 2
+    finally:
+        shown.close()
+
+
 def test_reload_types_keeps_selected_filter(tmp_path, qapp):
     """Gerenciar tipos nao deve derrubar o filtro: continua vendo as tasks."""
     from task_level.presentation.views.project_view import ProjectView

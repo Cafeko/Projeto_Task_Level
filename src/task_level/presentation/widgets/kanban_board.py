@@ -35,6 +35,7 @@ class KanbanBoard(QWidget):
         on_changed: Callable[[], None] | None = None,
         filters: list[dict] | None = None,
         focus: list[str] | None = None,
+        hide_final: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -44,6 +45,7 @@ class KanbanBoard(QWidget):
         self._on_changed = on_changed
         self._filters: list[dict] = list(filters or [])
         self._focus: list[str] = list(focus or [])
+        self._hide_final = bool(hide_final)
         self._columns: list[tuple[int, QLabel, QListWidget]] = []
 
         self._inner = QWidget()
@@ -98,6 +100,9 @@ class KanbanBoard(QWidget):
             tasks = TaskService(self._db_path).list_filtered(
                 self._project_id, self._task_type_id, self._filters
             )
+            if self._hide_final:
+                final_ids = {p.id for p in phases if p.is_final}
+                tasks = [t for t in tasks if t.phase_id not in final_ids]
             for t in tasks:
                 for v in uow.task_attributes.list_by_task(t.id):
                     focus_vals[(t.id, v.attribute_definition_id)] = v

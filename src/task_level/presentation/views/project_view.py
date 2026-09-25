@@ -17,6 +17,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QHeaderView,
@@ -129,6 +130,12 @@ class ProjectView(QWidget):
         self._view_mode.addItem("Por tipo e fase", VIEW_GROUPED)
         self._view_mode.addItem("Recentes", VIEW_RECENT)
         self._view_mode.currentIndexChanged.connect(self._mode_changed)
+        self._hide_final = False
+        self._chk_hide_final = QCheckBox("Ocultar finalizadas")
+        self._chk_hide_final.setToolTip(
+            "Esconde as tasks que estao na fase final (vale no Todos e no Kanban)"
+        )
+        self._chk_hide_final.toggled.connect(self._on_hide_final_toggled)
         btn_new = QPushButton("Nova task")
         btn_new.clicked.connect(self._new_task)
         btn_types = QPushButton("Tipos de tarefa...")
@@ -155,6 +162,7 @@ class ProjectView(QWidget):
         self._view_label = QLabel("Visão:")
         top.addWidget(self._view_label)
         top.addWidget(self._view_mode)
+        top.addWidget(self._chk_hide_final)
         top.addWidget(btn_new)
         top.addWidget(btn_types)
         top.addWidget(self._btn_undo)
@@ -215,6 +223,7 @@ class ProjectView(QWidget):
         self._title.setText(project.name)
         self._load_focus()
         self._update_focus_button()
+        self._load_hide_final()
         self._refresh_undo_buttons()
         self._reload_types()
 
@@ -245,6 +254,49 @@ class ProjectView(QWidget):
     def _update_focus_button(self) -> None:
         total = sum(len(v) for v in self._focus.values())
         self._btn_focus.setText(f"Foco ({total})" if total else "Foco...")
+
+    def _hide_final_key(self) -> str:
+        return f"hide_final/project_{self.project_id}"
+
+    def _load_hide_final(self) -> None:
+        self._hide_final = False
+        try:
+            raw = QSettings("TaskLevel", "task-level").value(
+                self._hide_final_key(), False
+            )
+            if isinstance(raw, bool):
+                self._hide_final = raw
+            elif isinstance(raw, str):
+                self._hide_final = raw.lower() in ("true", "1", "yes")
+            else:
+                self._hide_final = bool(raw)
+        except Exception:
+            self._hide_final = False
+        self._chk_hide_final.blockSignals(True)
+        self._chk_hide_final.setChecked(self._hide_final)
+        self._chk_hide_final.blockSignals(False)
+
+    def _on_hide_final_toggled(self, checked: bool) -> None:
+        self._hide_final = bool(checked)
+        try:
+            QSettings("TaskLevel", "task-level").setValue(
+                self._hide_final_key(), self._hide_final
+            )
+        except Exception:
+            pass
+        self._filter_changed()
+
+    @staticmethod
+    def _drop_final_tasks(tasks: list, phases_by_id: dict) -> list:
+        """Tira tasks cuja fase e final (fase ausente = mostra)."""
+        if not tasks:
+            return tasks
+        return [
+            t
+            for t in tasks
+            if not (phases_by_id.get(t.phase_id) is not None
+                    and phases_by_id[t.phase_id].is_final)
+        ]
 
     def _open_focus(self) -> None:
         if self.project_id is None:
@@ -520,6 +572,8 @@ class ProjectView(QWidget):
                     self.project_id, None, self._filters
                 )
             )
+            if self._hide_final:
+                tasks = self._drop_final_tasks(tasks, phases)
             focus_defs, focus_vals, focus_texts = self._focus_data(uow, tasks)
         ref_numbers = self._ref_numbers(tasks)
         for t in tasks:
@@ -564,6 +618,8 @@ class ProjectView(QWidget):
             tasks_all = TaskService(self._db_path).list_filtered(
                 self.project_id, None, self._filters
             )
+            if self._hide_final:
+                tasks_all = self._drop_final_tasks(tasks_all, phases)
             grouped = group_by_type_and_phase(tasks_all, phases)
             focus_defs, focus_vals, focus_texts = self._focus_data(uow, tasks_all)
             ref_numbers = self._ref_numbers(tasks_all)
@@ -796,6 +852,7 @@ class ProjectView(QWidget):
             on_changed=self._board_changed,
             filters=self._filters,
             focus=self._focus.get(str(type_id), []),
+            hide_final=self._hide_final,
         )
         self._board_layout.addWidget(board)
         self._stack.setCurrentWidget(self._board_host)
